@@ -12,6 +12,7 @@ import argparse
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from .tools import PattieTools
 
@@ -143,9 +144,17 @@ def main(argv=None) -> None:
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--host", default="127.0.0.1",
                    help="127.0.0.1 by default; in Docker use 0.0.0.0 on a private network with no published port")
+    p.add_argument("--allowed-host", action="append", default=[],
+                   help="extra Host name clients may use, e.g. pattie-tools (DNS-rebinding protection stays on)")
     args = p.parse_args(argv)
     if args.http:
         mcp.settings.host, mcp.settings.port = args.host, args.port  # never on a public interface
+        hosts = ["127.0.0.1", "localhost", "[::1]", *args.allowed_host]
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[f"{h}:*" for h in hosts],
+            allowed_origins=[f"http://{h}:*" for h in hosts],
+        )
         mcp.run(transport="streamable-http")
     else:
         mcp.run()

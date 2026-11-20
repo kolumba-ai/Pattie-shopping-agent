@@ -26,4 +26,5 @@ ENV PATTIE_DB=/data/pattie.sqlite3 PYTHONUNBUFFERED=1
 # process only. Nothing is written to disk. OP_SERVICE_ACCOUNT_TOKEN comes from the host's
 # root-only token file (compose.yaml).
 CMD ["op", "run", "--env-file=/app/secrets.env", "--", \
-     "python", "-m", "pattie.mcp_server", "--http", "--host", "0.0.0.0", "--port", "8765"]
+     "python", "-m", "pattie.mcp_server", "--http", "--host", "0.0.0.0", "--port", "8765", \
+     "--allowed-host", "pattie-tools"]
