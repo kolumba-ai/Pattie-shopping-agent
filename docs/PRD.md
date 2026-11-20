@@ -6,7 +6,7 @@ Nov 20, 2026 · Emmalou Schmucker (product) · Living version: [Claude doc](http
 
 ## Summary
 
-Pattie is a shopping agent that lives in WhatsApp and reads your Google Calendar. It spots events that need stuff (trips, parties, hackathons), proposes what you might need, finds it on Amazon, gets your yes, and then buys it for you with its own virtual card, within spending limits you set. It also handles food: when your day is packed, it asks ahead whether to order breakfast or dinner from DoorDash or Uber Eats.
+Pattie is a shopping agent that lives in Telegram and reads your Google Calendar. It spots events that need stuff (trips, parties, hackathons), proposes what you might need, finds it on Amazon, gets your yes, and then buys it for you with its own virtual card, within spending limits you set. It also handles food: when your day is packed, it asks ahead whether to order breakfast or dinner from DoorDash or Uber Eats.
 
 **The problem.** Shopping tools wait for you to search. People forget the power bank before the flight, or end up hungry and ordering junk at 9pm after a full-day event. The calendar already knows what's coming, but nothing acts on it.
 
@@ -14,7 +14,7 @@ Pattie is a shopping agent that lives in WhatsApp and reads your Google Calendar
 
 ## Goals and success metrics
 
-The hackathon goal is one reliable end-to-end demo: a calendar event becomes a WhatsApp proposal, then a placed Amazon order after one yes, plus one proactive food nudge.
+The hackathon goal is one reliable end-to-end demo: a calendar event becomes a Telegram proposal, then a placed Amazon order after one yes, plus one proactive food nudge.
 
 **Goals**
 
@@ -50,7 +50,7 @@ The primary user is a busy professional or student with a full calendar who trav
 | # | As a user, I want… | So that… | Priority |
 | --- | --- | --- | --- |
 | 1 | Pattie to notice my "Flight to NY" next week and suggest what I might need | I don't forget essentials | Must |
-| 2 | To answer with a quick yes/no or pick an option in WhatsApp | Buying takes seconds | Must |
+| 2 | To answer with a quick yes/no or pick an option in Telegram | Buying takes seconds | Must |
 | 3 | One best pick when the choice is obvious, and three options when it isn't | I'm not overloaded, but stay in control | Must |
 | 4 | Pattie to place the order for me after I say yes | I don't have to open Amazon and check out | Must |
 | 5 | To be asked the evening before a full-day event if I want breakfast delivered | I'm fed without planning it | Must |
@@ -69,7 +69,7 @@ Every flow ends with an explicit user yes, a policy check, and an order Pattie p
 ```mermaid
 flowchart LR
     A[Calendar event<br/>new or changed] --> B[Classify event<br/>skip if no need]
-    B --> C[Propose on WhatsApp<br/>item types + reasons]
+    B --> C[Propose on Telegram<br/>item types + reasons]
     C -- user says yes --> D[Search and rank<br/>fit, price, delivery]
     D --> E[Send 1 or 3 options<br/>sponsored labeled]
     E -- user picks --> F{Urgency tier}
@@ -85,7 +85,7 @@ Urgent items are ordered right after the yes. Items needed in 8 to 30 days wait 
 
 ### 1. Event detection
 
-Pattie checks the calendar every 15 minutes and looks 30 days ahead. For each new or changed event, an LLM classifies it from the title, location, duration, attendees and description.
+Google notifies Pattie as soon as the calendar changes, and Pattie looks 30 days ahead. For each new or changed event, it first recalls what it knows about the owner from memory, then an LLM classifies the event from the title, location, duration, attendees and description.
 
 | Event type | Example | Typical needs | Food nudge? |
 | --- | --- | --- | --- |
@@ -100,7 +100,7 @@ Events with no clear need are skipped silently. Pattie messages at most once per
 
 ### 2. Proposal and consent
 
-Pattie sends one WhatsApp message with up to five suggested item types and a reason for each. Example: "Flight to NY on Dec 3. Want me to look for a travel adapter, a neck pillow, and TSA-size toiletries?" The user replies with all, some, or none. No search starts before this yes.
+Pattie sends one Telegram message with up to five suggested item types and a reason for each, shaped by what it remembers about the owner. Example: "Flight to NY on Thursday. You already have a neck pillow and packing cubes, so just unscented travel-size toiletries and a power bank?" The user replies with all, some, or none. No search starts before this yes.
 
 ### 3. Urgency tiers
 
@@ -206,24 +206,26 @@ Before every checkout, Pattie checks the purchase against a spending policy the 
 
 ## Technical architecture
 
-One backend service runs a scheduler and a WhatsApp webhook. An LLM agent decides what to propose, and every outside system is reached through its official API or a handoff link.
+Pattie runs as an OpenBot agent on a Hostinger VPS and talks to the owner in Telegram. An LLM agent decides what to propose, and every outside system is reached through its official API or a handoff link. [ARCHITECTURE.md](ARCHITECTURE.md) has the full design; this table is the summary.
 
 | Component | Choice for the hackathon | Notes |
 | --- | --- | --- |
-| Messaging | Twilio WhatsApp sandbox | Fastest setup. Production needs Meta Business verification, and pre-approved templates for proactive messages sent outside the 24-hour window |
-| Calendar | Google Calendar API, OAuth, polling every 15 min | Push notifications (watch channels) later |
-| Agent | Claude (latest Sonnet) with tool calls | Tools: classify_event, suggest_items, search_products, rank_products, check_policy, checkout, card_status, build_cart_link, add_to_basket, suggest_food |
+| Messaging | Telegram, through OpenBot's built-in connector | One chat for proposals, photos, replies, cart links and food nudges. No business verification or message templates needed |
+| Agent runtime | OpenBot server on a Hostinger VPS | Runs Pattie, its routines and the Telegram connector; admin access over Tailscale |
+| Calendar | Google Calendar API, read-only | Push notifications (`events.watch`) plus sync tokens, so only changed events are fetched; a fallback poll catches missed pushes. The demo account uses a service account with the calendar shared read-only (`pattie/sources.py`) |
+| Agent | Open-weight model preferred, Claude Sonnet as fallback, with tool calls (event classification currently runs on Claude Sonnet 5.5) | Tools: classify_event, suggest_items, search_products, rank_products, check_policy, checkout, card_status, build_cart_link, add_to_basket, suggest_food |
 | Payments | Virtual card from a card issuer with an API | Hard limits at the issuer; spending policy in Pattie; freeze from chat |
 | Secrets | Vault | Holds API keys, the Amazon session and the card details |
 | Product search | PA-API / Creators API, or a curated catalog fallback | Returns ASIN, title, price, rating, delivery estimate, sponsored flag |
 | Price watch | Keepa API + daily cron job | Checks basket prices and fires the order triggers |
 | Food | Deep links to DoorDash / Uber Eats, optional Instacart | Order text written by the agent |
-| Storage | Postgres or SQLite | Users, preferences, events seen, proposals, basket, price history |
-| Scheduler | Cron job / worker | Calendar polling, food-nudge timing, price checks |
+| Memory | Cognee | Preferences, things the owner owns, people, past accepts and declines; recalled before every proposal (`pattie/memory.py`) |
+| Storage | Postgres | Exact records: events seen, proposals, basket, price history, purchases |
+| Scheduler | Small worker on the VPS | Food-nudge timing, price checks at randomized shopping hours, fallback calendar poll |
 
 **Data model (minimum)**
 
-- `user`: phone, timezone, home address, has_prime, budgets per category, food preferences, quiet hours
+- `user`: Telegram chat id, timezone, home address, has_prime, budgets per category, food preferences, quiet hours
 - `event`: calendar id, type, start, end, location, processed_at
 - `proposal`: event id, items, status (sent / accepted / declined)
 - `basket_item`: ASIN, price when added, latest safe order date, status
@@ -294,7 +296,7 @@ Partner call-outs are in brackets; several judges come from these partners.
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | No PA-API / Creators API keys in time | No live product data | Curated catalog of ~40 real ASINs for the demo events, same interface as the API |
-| WhatsApp proactive-message rules | Messages blocked outside the 24h window | Twilio sandbox for the demo; template messages for production |
+| Proactive messages from OpenBot don't reach Telegram | Pattie can't start a conversation from a calendar event | Test it first (build step 2 in ARCHITECTURE.md); fallback: send through the Telegram Bot API directly |
 | Agent suggests irrelevant items | Feels like spam, users mute it | Max one message per event, skip unclear events, learn from declines |
 | Wrong urgency tier or delivery date | Item arrives after the event | Use delivery estimates from the product data, plus a 2-day buffer |
 | Food nudge at a bad moment | Annoying | Quiet hours, one nudge per meal, easy "stop food suggestions" |
@@ -310,7 +312,7 @@ Partner call-outs are in brackets; several judges come from these partners.
 - [ ] Which LLM tier for classification vs. ranking (cost vs. quality)?
 - [ ] Should the one-option threshold be user-adjustable ("just buy it for me" vs. "always show me three")?
 - [ ] Price-drop trigger: 15% the right number, or relative to Keepa's 90-day low?
-- [ ] Do we show a web view for the long-term basket, or keep everything in WhatsApp?
+- [ ] Do we show a web view for the long-term basket, or keep everything in Telegram?
 - [ ] Confirm API access and credits with Cognee, Airbyte, Persona and Amplitude + Statsig at kickoff.
 - [ ] Which card issuer can issue a limited virtual card today (Privacy.com, Lithic, Stripe Issuing)?
 - [ ] What are the real limits, and should the auto-approve threshold ever go above $0?
