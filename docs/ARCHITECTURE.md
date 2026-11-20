@@ -23,6 +23,7 @@ Open questions, including the points where the PRD and Context.md disagree, are 
 | Memory and state | **Cognee** + Postgres | Cognee for long-term memory; Postgres for exact records such as the basket and prices |
 | Data layer | **Airbyte** | Moves calendar and order-confirmation data into Postgres |
 | Tracing and experiments | **Amplitude** + **Statsig** | Every agent step is logged; flags control risky or tunable behavior |
+| Network security | **Tailscale** | The VPS has no open inbound ports. Admin access goes over a private Tailscale network, and the one public endpoint (the calendar webhook) goes through Tailscale Funnel |
 | Secrets | **Vault** | Holds every access key, the Amazon session and the virtual card details. Services fetch them at run time; nothing sensitive sits in files or in the model's context |
 | Payments | **Virtual credit card** with spend limits | The card Pattie pays with. Limits are enforced by the card issuer and by Pattie's spending policy |
 | Model | Open-weight model preferred; **Claude Sonnet** as fallback | Classifies events, ranks products, writes messages |
@@ -44,7 +45,15 @@ flowchart LR
         RELAY[Telegram relay<br/>holds the bot token]
     end
 
-    subgraph VPS["Hostinger VPS (Docker, Traefik)"]
+    subgraph Admin["Owner's laptop (on the tailnet)"]
+        LAP[SSH, Vault UI,<br/>Postgres client]
+    end
+
+    subgraph TS["Tailscale"]
+        FUN[Funnel<br/>public HTTPS for the webhook only]
+    end
+
+    subgraph VPS["Hostinger VPS (Docker, no open inbound ports)"]
         AG[Pattie agent<br/>OpenBot server]
         API[OpenBot local API<br/>127.0.0.1, bearer token]
         MCP[Pattie tools<br/>MCP server]
@@ -67,7 +76,8 @@ flowchart LR
     AMZ[Amazon.com]
 
     TG <-->|chat, photos| RELAY <--> AG
-    GC -->|push notification| HK -->|run routine| API
+    GC -->|push notification| FUN --> HK -->|run routine| API
+    LAP -.->|tailnet only| VPS
     SCH -->|run routine| API
     API --> AG
     AG <-->|MCP| MCP
@@ -203,8 +213,8 @@ Pattie doesn't use OpenBot's built-in browser for Amazon, because Amazon needs r
 
 **Network.**
 
-- Only Traefik's ports 80 and 443 are public, and only for the calendar webhook path.
-- OpenBot's local API, the MCP servers and Postgres listen only on the VPS or the Docker network. Admin access is through an SSH tunnel.
+- No inbound ports are open to the internet. Admin access is over Tailscale, and the calendar webhook is published through Tailscale Funnel. See [VPS security (Tailscale)](#vps-security-tailscale).
+- OpenBot's local API, the MCP servers and Postgres listen only on `127.0.0.1`, the Docker network or the Tailscale interface.
 - OpenBot agents can run commands and use the network. Give Pattie only the MCP servers it needs, and turn off shell access where the harness allows it.
 
 ### Tilion (browser)
@@ -277,7 +287,7 @@ Airbyte moves data from the owner's accounts into Postgres on the VPS. It runs s
 | Google Sheets (optional) | A sheet the owner edits with preferences or a watch list | Profile overrides |
 
 - **Hosting:** Airbyte Cloud. Self-hosted Airbyte needs more memory than the rest of the stack combined.
-- **Destination:** Postgres on the VPS, through a restricted user over an SSH tunnel or an IP allowlist.
+- **Destination:** Postgres on the VPS, through a restricted write-only user. Airbyte Cloud can't join the tailnet, so this is the one inbound exception: the Postgres port is opened only to Airbyte Cloud's published IP addresses, with TLS required. See FAQ 22 for alternatives.
 - **Context Store:** Airbyte's agent-oriented Context Store can pre-join these sources, if the hackathon credits include it.
 
 ### Amplitude and Statsig (tracing and experiments)
@@ -454,18 +464,58 @@ Every secret Pattie uses lives in a **Vault** (HashiCorp Vault, or its open-sour
 
 **Unsealing.** A self-hosted Vault starts sealed after a reboot. For the hackathon, unseal it by hand. Afterward, use auto-unseal with a cloud key service.
 
+## VPS security (Tailscale)
+
+The VPS is reachable from the internet only where it must be. [Tailscale](https://tailscale.com/) puts the VPS and the owner's devices on a private network (a "tailnet"), so admin tools never need a public port.
+
+### What's reachable, and from where
+
+| Service | Internet | Tailnet (owner's devices) | VPS only |
+|---|---|---|---|
+| SSH | Closed | Yes, through Tailscale SSH | |
+| Calendar webhook receiver | Yes, through **Tailscale Funnel** (HTTPS, one path) | | |
+| Vault | Closed | Yes (UI and CLI) | Services read secrets locally |
+| Postgres | Airbyte Cloud's IP addresses only (FAQ 22) | Yes (admin client) | Tools server |
+| OpenBot local API | Closed | | `127.0.0.1` only |
+| Pattie tools and Cognee MCP servers | Closed | | Docker network only |
+| OpenBot app access | Through OpenBot's own remote-access service, no open port | | |
+
+**Tailscale Funnel** publishes the webhook receiver at a public HTTPS address (`https://<vps-name>.<tailnet>.ts.net/calendar-webhook`) with a valid certificate, without opening any inbound port. Google's push notifications need exactly that: a public HTTPS address with a valid certificate. This replaces Traefik, so the VPS no longer needs a reverse proxy or ports 80 and 443.
+
+### Setup
+
+1. **Join the VPS to the tailnet** with a pre-approved auth key and a tag (`tag:pattie-vps`). Turn off key expiry for this node so it doesn't drop off the network.
+2. **Turn on Tailscale SSH** (`tailscale up --ssh`), check that it works from the owner's laptop, then close port 22 to the internet.
+3. **Firewall:** in Hostinger's firewall and `ufw`, deny all inbound traffic except Tailscale's UDP port (41641, for direct connections) and the Airbyte exception. Publish Docker containers only on `127.0.0.1` or the Tailscale address (`100.x.y.z`), because ports Docker publishes on all interfaces bypass `ufw`.
+4. **Funnel:** `tailscale funnel` for the webhook receiver's port, limited to the `/calendar-webhook` path.
+5. **Access rules (tailnet policy):**
+   - only the owner's devices (`tag:admin` or the owner's user) can reach `tag:pattie-vps`, and only on SSH, Vault and Postgres;
+   - `tag:pattie-vps` can't open connections to the owner's devices, so a compromised VPS can't reach the laptop;
+   - Tailscale SSH requires a fresh login check for root.
+
+### Hardening that goes with it
+
+- Key-only SSH, no root login, and password login off (Tailscale SSH covers the day-to-day).
+- Unattended security upgrades for Ubuntu, plus Tailscale's automatic updates (tenet 2).
+- Each service runs as its own non-root user, with Docker's default seccomp profile (OpenBot ships its own `seccomp.json`).
+- Tailscale's audit logs record who connected to the VPS, alongside Vault's audit log (tenet 6).
+
+### About "Tailkit"
+
+`tailkitd` ([wf-pro-dev/tailkitd](https://github.com/wf-pro-dev/tailkitd)) is a separate, very new project (no stars, one release). It runs on top of Tailscale and exposes Docker, systemd and file control over the tailnet. It's a remote-management agent, not a security tool, and it adds attack surface, so Pattie doesn't use it. Tailscale itself does the securing.
+
 ## Security and data ownership
 
 - **Secrets:** all in Vault (above). `.env` remains gitignored for local development only. The Telegram bot token never reaches the VPS: OpenBot's relay holds it.
 - **Card data:** card details move from Vault directly into the browser's payment form during checkout. They never enter the model's context, Postgres, Cognee or logs. Tilion's cloud browser does see the page, so Tilion is part of the trust chain for payments (FAQ 11).
 - **Least privilege:** read-only scope on Google Calendar, Gmail limited to order confirmations, card details readable only by `checkout`.
-- **Private by default:** OpenBot's local API, the MCP servers, Postgres and Cognee aren't public. The webhook receiver checks Google's channel token.
+- **Private by default:** no inbound ports are open except the Funnel webhook path and the Airbyte exception. OpenBot's local API, the MCP servers, Postgres and Cognee aren't public. The webhook receiver checks Google's channel token on every request, because Funnel makes that path reachable by anyone.
 - **Owner controls in chat:** "what do you know about me", "forget X", "pause Pattie", "stop food suggestions", "freeze the card", "how much have you spent this month?".
 - **Backups:** Hostinger's weekly VPS backups, plus a nightly Postgres dump.
 
 ## Build order for the hackathon
 
-1. **VPS, Vault, OpenBot and Telegram.** Create a Hostinger Ubuntu and Docker VPS. Start Vault and load the API keys. Install the OpenBot server with Docker Compose, sign it in, connect Telegram as a direct chat, and make Pattie the Telegram Orchestrator. *Done when the owner can chat with Pattie in Telegram and no key sits in a plain file.*
+1. **VPS, Tailscale, Vault, OpenBot and Telegram.** Create a Hostinger Ubuntu and Docker VPS. Join it to the tailnet, turn on Tailscale SSH, then close every inbound port. Start Vault and load the API keys. Install the OpenBot server with Docker Compose, sign it in, connect Telegram as a direct chat, and make Pattie the Telegram Orchestrator. *Done when the owner can chat with Pattie in Telegram and no key sits in a plain file.*
 2. **Proactive message test.** Create the "calendar event" routine and start it from the local API with a fake event. *Done when the routine posts into the Telegram chat.* This is the riskiest OpenBot assumption (FAQ 1), so test it early.
 3. **Search and cart link.** Build the Pattie tools MCP server with `search_products` and `build_cart_link`, reading keys from Vault. *Done when "find me a power bank" returns a photo, a price and a working cart link.*
 4. **Calendar trigger.** Set up OAuth, the watch channel and the webhook receiver. *Done when a new test event produces a proposal in Telegram.*
@@ -555,3 +605,19 @@ For example, "just pick for me" versus "always show me three." Behind `one_vs_th
 
 **20. Are API access and credits confirmed with Cognee, Airbyte, Persona, Amplitude and Statsig?**
 Check at kickoff. Add the open-weight model provider (for example Arcee) and the card issuer to that list.
+
+### About VPS security
+
+**21. Is Tailscale Funnel's public address acceptable for Google's push notifications?**
+Funnel gives a public HTTPS address on `ts.net` with a valid certificate, which is what Google asks for. *To settle it:* register a watch channel against the Funnel address during build step 4. *If Google rejects it:* point a domain you own at the VPS and open port 443 for the webhook path only, behind Traefik or Caddy.
+
+**22. How should Airbyte Cloud reach Postgres without the tailnet?**
+Airbyte Cloud can't join the tailnet. Options:
+- open the Postgres port only to Airbyte Cloud's published IP addresses, with TLS and a write-only user (this document's default);
+- have Airbyte write to a managed database or object storage instead, which the tools server reads;
+- run Airbyte's open-source version on a machine inside the tailnet (heavy for this VPS).
+
+*Pick one before build step 9.*
+
+**23. Did "Tailkit" mean Tailscale?**
+This document assumes so. If the team meant `tailkitd` specifically, note that it's a management agent with no track record, not a hardening tool.
