@@ -1,0 +1,89 @@
+"""Tests for the watcher -> OpenBot bridge, with a fake OpenBot API (no network).
+
+    .venv/bin/python -m pytest tests/test_bridge.py
+"""
+import json
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from pattie.openbot_bridge import Bridge, OpenBotAPI  # noqa: E402
+
+NOW = datetime(2026, 11, 20, 18, 0, tzinfo=timezone.utc)
+
+
+class FakeOpenBot:
+    def __init__(self):
+        self.runs = []
+
+    def __call__(self, method, url, headers, body=None):
+        assert headers == {"Authorization": "Bearer test-token"}
+        if method == "GET" and url.endswith("/v1/agents"):
+            return [{"id": "agent-1", "name": "Pattie", "routines": [
+                {"id": "r-event", "name": "Calendar event", "active": True},
+                {"id": "r-food", "name": "Food nudge", "active": True}]}]
+        assert method == "POST"
+        self.runs.append((url, json.loads(body["payload"])))
+        return {"ok": True}
+
+
+def setup(clock=NOW):
+    auto = Path(tempfile.mkdtemp())
+    (auto / "url").write_text("http://127.0.0.1:41234\n")
+    (auto / "headers").write_text("Authorization: Bearer test-token\n")
+    fake = FakeOpenBot()
+    logs = []
+    db = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False).name
+    return Bridge(OpenBotAPI(str(auto), http=fake), db, clock=lambda: clock, log=logs.append), fake, logs, db
+
+
+EVENT = {"id": "hack1", "title": "Hackathon SF", "start": "2026-11-21T08:00:00-08:00",
+         "end": "2026-11-21T21:00:00-08:00", "location": "Shack15"}
+NUDGE = {"meal": "breakfast", "deliver_to": "Shack15", "deliver_at": "2026-11-21T08:15:00-08:00",
+         "ask_at": "2026-11-20T20:00:00-08:00", "reason": "Full-day event starts at 8:00AM."}
+
+
+def line(decision, event=EVENT):
+    return json.dumps({"event": event, "decision": decision})
+
+
+def test_products_start_the_event_routine():
+    bridge, fake, _, _ = setup()
+    bridge.handle(line({"needs_products": True, "items": [{"item": "power bank"}], "food_nudges": []}))
+    url, payload = fake.runs[0]
+    assert url == "http://127.0.0.1:41234/v1/agents/agent-1/routines/r-event/run"
+    assert payload["kind"] == "calendar_event" and payload["event"]["title"] == "Hackathon SF"
+
+
+def test_food_nudge_waits_until_ask_at_and_sends_once():
+    bridge, fake, _, db = setup()
+    bridge.handle(line({"needs_products": False, "items": [], "food_nudges": [NUDGE]}))
+    assert fake.runs == [] and bridge.send_due() == 0           # 10am PT: too early
+    bridge.clock = lambda: datetime(2026, 11, 21, 4, 1, tzinfo=timezone.utc)  # 8:01pm PT
+    assert bridge.send_due() == 1 and bridge.send_due() == 0    # sent once
+    url, payload = fake.runs[0]
+    assert url.endswith("/routines/r-food/run") and payload["nudge"]["meal"] == "breakfast"
+    # an edited event replaces its pending nudge instead of adding a second one
+    bridge2, fake2, _, _ = setup()
+    bridge2.handle(line({"needs_products": False, "food_nudges": [NUDGE]}))
+    bridge2.handle(line({"needs_products": False, "food_nudges": [{**NUDGE, "ask_at": "2026-11-20T21:00:00-08:00"}]}))
+    assert bridge2.db.execute("SELECT COUNT(*) FROM nudge").fetchone()[0] == 1
+
+
+def test_nothing_needed_and_openbot_not_ready():
+    bridge, fake, logs, _ = setup()
+    bridge.handle(line({"needs_products": False, "items": [], "food_nudges": []}))
+    assert fake.runs == [] and "needs nothing" in logs[-1]
+    missing = Bridge(OpenBotAPI(tempfile.mkdtemp()), tempfile.NamedTemporaryFile(suffix=".db", delete=False).name,
+                     log=logs.append)
+    missing.handle(line({"needs_products": True, "items": [], "food_nudges": []}))
+    assert "Local scripts" in logs[-1]   # explains how to turn the API on
+
+
+if __name__ == "__main__":
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print(f"ok  {name}")

@@ -1,0 +1,40 @@
+# Calendar watcher + bridge. Shares OpenBot's network namespace so it can reach OpenBot's local
+# automation API on 127.0.0.1, and mounts only OpenBot's automation folder (url + headers),
+# read-only, not the rest of OpenBot's data.
+#
+# Needs first: the Pattie agent with Permissions -> Local scripts on (creates the folder), its
+# "Calendar event" and "Food nudge" routines, and PATTIE_CALENDAR_ID in /etc/pattie/watcher.env.
+#   cd /opt/pattie && docker compose -f infra/pattie-watcher/compose.yaml up -d --build
+services:
+  pattie-watcher:
+    build:
+      context: ../..
+      dockerfile: infra/pattie-watcher/Dockerfile
+    container_name: pattie-watcher
+    restart: unless-stopped
+    network_mode: "container:openbot-openbot-1"
+    env_file:
+      - /etc/pattie/op-token.env      # OP_SERVICE_ACCOUNT_TOKEN (root-only)
+      - /etc/pattie/watcher.env       # PATTIE_CALENDAR_ID=... (not a secret)
+    environment:
+      PATTIE_TZ: America/Los_Angeles
+      PATTIE_USER: anna_susan
+    volumes:
+      - watcher-data:/data
+      - type: volume
+        source: openbot_openbot-data
+        target: /openbot-automation
+        read_only: true
+        volume:
+          subpath: OpenBot/automation
+          nocopy: true
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+volumes:
+  watcher-data:
+  openbot_openbot-data:
+    external: true

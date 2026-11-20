@@ -1,0 +1,7 @@
+# Calendar watcher + bridge. Memory (Cognee) isn't installed yet, so the watcher runs with
+# --no-memory; add cognee[anthropic,turso] here to turn memory on.
+anthropic>=0.125.0
+google-api-python-client>=2.198.0
+google-auth>=2.50.0
+amplitude-analytics>=1.2.3
+singlestoredb>=1.20
