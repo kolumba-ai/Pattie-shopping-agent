@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 scratch/
+.venv/
+secrets/
+*.sqlite3
+service-account*.json
