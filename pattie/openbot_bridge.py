@@ -126,7 +126,16 @@ class Bridge:
     def handle(self, line: str) -> None:
         """Queue what this decision needs. Delivery happens in send_due, with retries, so nothing is
         lost while OpenBot is restarting or its local API isn't turned on yet."""
-        msg = json.loads(line)
+        line = line.strip()
+        if not line.startswith("{"):
+            return  # the watcher's human-readable output; only JSON lines are decisions
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            self.log(f"ignored a line that isn't valid JSON: {line[:80]}")
+            return
+        if "decision" not in msg:
+            return
         ev, d = msg.get("event", {}), msg.get("decision", {})
         title = ev.get("title", "?")
         if d.get("needs_products"):

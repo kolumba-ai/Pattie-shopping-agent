@@ -72,6 +72,14 @@ def test_food_nudge_waits_until_ask_at_and_sends_once():
     assert bridge2.db.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 1
 
 
+def test_ignores_non_json_output():
+    bridge, fake, _, _ = setup()
+    for junk in ["Watching anna@example.com (every 60s)", "       * cheapest: Gift bag $4.99",
+                 "{not json", "", '{"other": 1}']:
+        bridge.handle(junk)
+    assert fake.runs == [] and bridge.pending() == 0
+
+
 def test_nothing_needed_and_openbot_not_ready():
     bridge, fake, logs, _ = setup()
     bridge.handle(line({"needs_products": False, "items": [], "food_nudges": []}))
