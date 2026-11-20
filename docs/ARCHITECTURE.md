@@ -24,7 +24,7 @@ Open questions, including the points where the PRD and Context.md disagree, are 
 | Data layer | **Airbyte** | Moves calendar and order-confirmation data into Postgres |
 | Tracing and experiments | **Amplitude** + **Statsig** | Every agent step is logged; flags control risky or tunable behavior |
 | Network security | **Tailscale** | The VPS has no open inbound ports. Admin access goes over a private Tailscale network, and the one public endpoint (the calendar webhook) goes through Tailscale Funnel |
-| Secrets | **Vault** | Holds every access key, the Amazon session and the virtual card details. Services fetch them at run time; nothing sensitive sits in files or in the model's context |
+| Secrets | **1Password** | Holds every access key, the Amazon session and the virtual card details, in vaults made for Pattie. Services read them at run time through 1Password service accounts; nothing sensitive sits in plain files or in the model's context |
 | Payments | **Virtual credit card** with spend limits | The card Pattie pays with. Limits are enforced by the card issuer and by Pattie's spending policy |
 | Model | Open-weight model preferred; **Claude Sonnet** as fallback | Classifies events, ranks products, writes messages |
 
@@ -46,7 +46,7 @@ flowchart LR
     end
 
     subgraph Admin["Owner's laptop (on the tailnet)"]
-        LAP[SSH, Vault UI,<br/>Postgres client]
+        LAP[SSH,<br/>Postgres client]
     end
 
     subgraph TS["Tailscale"]
@@ -69,7 +69,7 @@ flowchart LR
         AM[Amplitude]
         SS[Statsig]
         LLM[Open-weight model<br/>Sonnet fallback]
-        VLT[Vault<br/>keys, session, card]
+        VLT[1Password<br/>Pattie vaults]
         ISS[Card issuer<br/>virtual card, limits]
     end
 
@@ -211,7 +211,7 @@ Each is started through OpenBot's **local automation API**:
 | `search_products` | Searches Amazon; returns ASIN, title, price, rating, reviews, photo, sponsored flag | Tilion (`amazon_search.py`) |
 | `rank_products` | Scores fit, rating, price and delivery date; applies the one-or-three rule and the sponsored policy | Model + rules + Statsig flags |
 | `check_policy` | Checks a proposed purchase against the spending policy and the card's remaining limits; returns allow, ask or block | Policy file + card issuer API |
-| `checkout` | Buys the approved items on Amazon with the virtual card. The card details go from Vault straight into the browser and never pass through the model | Vault + Tilion (logged-in session) |
+| `checkout` | Buys the approved items on Amazon with the virtual card. The card details go from 1Password straight into the browser and never pass through the model | 1Password + Tilion (logged-in session) |
 | `card_status` | Reports spend so far, remaining limits and recent transactions | Card issuer API |
 | `build_cart_link` | Builds the Amazon cart handoff URL, used when checkout isn't possible | Pure function |
 | `add_to_basket` / `check_basket` | Manages the long-term basket and price watch; fires the $35, price-drop and safe-order-date triggers | Postgres + Cognee + Tilion |
@@ -235,7 +235,7 @@ The tools server reaches Amazon through Tilion's cloud browser over HTTP, using 
 - **One session per shopping sitting.** Open a session, visit the homepage, run the searches, release it (`with t.session(residential=True)`). Cookies carry across pages, the visit looks like one person browsing (Context.md, Rule 4), and billing stays short.
 - **One session at a time.** `search_products` holds a lock, so a second request waits instead of opening a parallel session.
 - **Seller filter.** Searches add `rh=p_6:ATVPDKIKX0DER` to show only items sold by Amazon.com, as in the kitchen-cart demo.
-- **Logged-in session for checkout.** Searching doesn't need an account; checkout does. The `checkout` tool opens a **persistent** Tilion session that carries the owner's Amazon cookies, loaded from Vault, and saves the refreshed cookies back to Vault afterward. If Amazon asks for a one-time code, Pattie asks the owner in Telegram and waits.
+- **Logged-in session for checkout.** Searching doesn't need an account; checkout does. The `checkout` tool opens a **persistent** Tilion session that carries the owner's Amazon cookies, loaded from 1Password, and saves the refreshed cookies back to 1Password afterward. If Amazon asks for a one-time code, Pattie asks the owner in Telegram and waits.
 - **Photos.** Search results include each product's image URL. The tools server downloads the image so Pattie can send it as a photo in Telegram.
 - **Open product pages by ASIN** (`/dp/<ASIN>`), never through sponsored result links. A sponsored link redirects through Amazon's ad-click tracking and bills the advertiser, so following them automatically would count as automated ad clicks, which the PRD rules out. The sponsored flag is read from the search page; no ad is clicked.
 - **Failures.** A body `status` other than `ok` (`challenged`, `hard_blocked`, `rate_limited`) is an answer, not a transport error. Log it, don't retry right away, and tell the owner in Telegram if a search they're waiting on can't finish.
@@ -379,7 +379,7 @@ sequenceDiagram
     AG->>TG: photo(s) with price, rating, arrival, reason, "Sponsored" label
     TG->>AG: "yes"
     AG->>AG: check_policy (limits, merchant, category)
-    AG->>TL: checkout in logged-in session, virtual card from Vault
+    AG->>TL: checkout in logged-in session, virtual card from 1Password
     AG->>TG: order confirmed, arrival date, budget left
     AG->>CG: remember decision
     AG->>AM: item_chosen, checkout_completed
@@ -422,7 +422,7 @@ Pattie pays with a **virtual credit card** issued only for Pattie, with spend li
 - **Limits set at the issuer:** a per-transaction cap, a monthly cap, and where the issuer supports it, a merchant lock (Amazon, plus a separate card for food delivery if needed).
 - **Issuer API:** `card_status` reads spend and transactions, and the issuer's webhooks report each authorization. Every charge is logged to Amplitude with the `trace_id` of the purchase that caused it.
 - **Freeze from chat:** "freeze the card" calls the issuer API at once.
-- **Where the details live:** the card number, expiry and CVV are stored only in Vault and at the issuer. They're also saved as a payment method in the owner's Amazon account, so most checkouts select the saved card and never handle the number.
+- **Where the details live:** the card number, expiry and CVV are stored only in 1Password and at the issuer. They're also saved as a payment method in the owner's Amazon account, so most checkouts select the saved card and never handle the number.
 
 ### The spending policy
 
@@ -451,28 +451,30 @@ The policy is a versioned file in the repo (for example `policy.yaml`), with its
 
 **Food delivery** has no consumer ordering API on DoorDash or Uber Eats. Checking out in their web apps through the browser works the same way, but is less reliable. For the demo, food stays a deep link with the order written out, and the owner pays in the app.
 
-## Vault (secrets)
+## 1Password (secrets)
 
-Every secret Pattie uses lives in a **Vault** (HashiCorp Vault, or its open-source fork OpenBao), not in environment files:
+Every secret Pattie uses lives in the owner's **1Password** account, in vaults made only for Pattie, not in environment files. The owner already pays for 1Password and uses it on their Mac, their Linux machines (Omarchy) and their phone, so Pattie's secrets are managed in the same app as everything else.
 
-| Secret | Used by |
-|---|---|
-| API keys: Tilion, Cognee, Amplitude, Statsig, model providers, card issuer | Tools server |
-| Google OAuth client and refresh token | Webhook receiver, Airbyte setup |
-| OpenBot local API token | Webhook receiver, scheduler |
-| Amazon session cookies | `checkout` (read and write back) |
-| Virtual card number, expiry, CVV | `checkout`, only when the saved card on Amazon asks for re-entry |
+| Vault | Item | Used by |
+|---|---|---|
+| **Pattie** | API keys: Tilion, Cognee, Amplitude, Statsig, model providers, card issuer | Tools server |
+| **Pattie** | Google OAuth client and refresh token | Webhook receiver, Airbyte setup |
+| **Pattie** | OpenBot local API token | Webhook receiver, scheduler |
+| **Pattie** | Amazon session cookies | `checkout` (read and write back) |
+| **Pattie Card** | Virtual card (1Password's credit card item: number, expiry, CVV) | `checkout` only, when Amazon asks for re-entry |
 
 **How services get secrets:**
 
-- Each service (tools server, webhook receiver, scheduler) has its own Vault identity (AppRole) and a policy that allows reading only its own secrets. The card is readable by `checkout` alone.
-- Services fetch secrets when they need them, keep them in memory only, and get short-lived Vault tokens that renew automatically.
-- **The model never sees a secret.** Tools take references ("use the Pattie card"), and the tools server resolves them inside Vault-authenticated code. Tool results never include keys, cookies or card numbers. Logs and Amplitude events are filtered to make sure.
-- **Audit:** Vault's audit log records every read, with the service and the time. Card reads are also sent to Amplitude with their `trace_id`, so each one ties back to a specific approved purchase (tenet 6).
+- A 1Password **service account** gives the VPS access to the Pattie vault only. It can read every item and write only where needed (the refreshed Amazon session). The card sits in its own **Pattie Card** vault, readable by a second service account that only `checkout` uses, so no other service can read the card.
+- **The service account tokens are the only secrets on the VPS**, each in a root-only file (`/etc/pattie/op-token`, mode 600). Services read secrets with 1Password's Python SDK or the `op` command-line tool, using secret references such as `op://Pattie/Tilion/credential`.
+- For processes that only read environment variables, `op run` injects secrets when the process starts, without writing them to disk.
+- Services keep secrets in memory for their lifetime instead of fetching on every request, because service accounts have hourly request limits.
+- **The model never sees a secret.** Tools take references ("use the Pattie card"), and the tools server resolves them inside its own code. Tool results never include keys, cookies or card numbers. Logs and Amplitude events are filtered to make sure.
+- **Audit:** 1Password records service-account activity. Card reads are also sent to Amplitude with their `trace_id`, so each one ties back to a specific approved purchase (tenet 6).
 
-**Hosting.** Run Vault on the VPS in its own container, with storage on an encrypted volume. Alternatively, use a managed service (HCP Vault, or a secrets manager such as 1Password Secrets Automation or Infisical) to skip running it. Either way, the one secret left on the VPS is each service's Vault login (AppRole secret ID), readable only by that service's user.
+**Why 1Password and not a self-hosted Vault.** 1Password handles its own updates, backups and availability (tenet 2), and there's nothing to unseal after a reboot. The trade-off for tenet 1 is that secrets live in 1Password's cloud rather than on the owner's server; they're end-to-end encrypted, and the owner controls the account.
 
-**Unsealing.** A self-hosted Vault starts sealed after a reboot. For the hackathon, unseal it by hand. Afterward, use auto-unseal with a cloud key service.
+**If a token leaks:** revoke the service account in 1Password; every service loses access at once. Then create a new one and replace the token file.
 
 ## VPS security (Tailscale)
 
@@ -484,7 +486,6 @@ The VPS is reachable from the internet only where it must be. [Tailscale](https:
 |---|---|---|---|
 | SSH | Closed | Yes, through Tailscale SSH | |
 | Calendar webhook receiver | Yes, through **Tailscale Funnel** (HTTPS, one path) | | |
-| Vault | Closed | Yes (UI and CLI) | Services read secrets locally |
 | Postgres | Airbyte Cloud's IP addresses only (FAQ 22) | Yes (admin client) | Tools server |
 | OpenBot local API | Closed | | `127.0.0.1` only |
 | Pattie tools and Cognee MCP servers | Closed | | Docker network only |
@@ -499,7 +500,7 @@ The VPS is reachable from the internet only where it must be. [Tailscale](https:
 3. **Firewall:** in Hostinger's firewall and `ufw`, deny all inbound traffic except Tailscale's UDP port (41641, for direct connections) and the Airbyte exception. Publish Docker containers only on `127.0.0.1` or the Tailscale address (`100.x.y.z`), because ports Docker publishes on all interfaces bypass `ufw`.
 4. **Funnel:** `tailscale funnel` for the webhook receiver's port, limited to the `/calendar-webhook` path.
 5. **Access rules (tailnet policy):**
-   - only the owner's devices (`tag:admin` or the owner's user) can reach `tag:pattie-vps`, and only on SSH, Vault and Postgres;
+   - only the owner's devices (`tag:admin` or the owner's user) can reach `tag:pattie-vps`, and only on SSH and Postgres;
    - `tag:pattie-vps` can't open connections to the owner's devices, so a compromised VPS can't reach the laptop;
    - Tailscale SSH requires a fresh login check for root.
 
@@ -508,7 +509,7 @@ The VPS is reachable from the internet only where it must be. [Tailscale](https:
 - Key-only SSH, no root login, and password login off (Tailscale SSH covers the day-to-day).
 - Unattended security upgrades for Ubuntu, plus Tailscale's automatic updates (tenet 2).
 - Each service runs as its own non-root user, with Docker's default seccomp profile (OpenBot ships its own `seccomp.json`).
-- Tailscale's audit logs record who connected to the VPS, alongside Vault's audit log (tenet 6).
+- Tailscale's audit logs record who connected to the VPS, alongside 1Password's activity log (tenet 6).
 
 ### About "Tailkit"
 
@@ -516,8 +517,8 @@ The VPS is reachable from the internet only where it must be. [Tailscale](https:
 
 ## Security and data ownership
 
-- **Secrets:** all in Vault (above). `.env` remains gitignored for local development only. The Telegram bot token never reaches the VPS: OpenBot's relay holds it.
-- **Card data:** card details move from Vault directly into the browser's payment form during checkout. They never enter the model's context, Postgres, Cognee or logs. Tilion's cloud browser does see the page, so Tilion is part of the trust chain for payments (FAQ 11).
+- **Secrets:** all in 1Password (above). `.env` remains gitignored for local development only. The Telegram bot token never reaches the VPS: OpenBot's relay holds it.
+- **Card data:** card details move from 1Password directly into the browser's payment form during checkout. They never enter the model's context, Postgres, Cognee or logs. Tilion's cloud browser does see the page, so Tilion is part of the trust chain for payments (FAQ 11).
 - **Least privilege:** read-only scope on Google Calendar, Gmail limited to order confirmations, card details readable only by `checkout`.
 - **Private by default:** no inbound ports are open except the Funnel webhook path and the Airbyte exception. OpenBot's local API, the MCP servers, Postgres and Cognee aren't public. The webhook receiver checks Google's channel token on every request, because Funnel makes that path reachable by anyone.
 - **Owner controls in chat:** "what do you know about me", "forget X", "pause Pattie", "stop food suggestions", "freeze the card", "how much have you spent this month?".
@@ -525,11 +526,11 @@ The VPS is reachable from the internet only where it must be. [Tailscale](https:
 
 ## Build order for the hackathon
 
-1. **VPS, Tailscale, Vault, OpenBot and Telegram.** Create a Hostinger Ubuntu and Docker VPS. Join it to the tailnet, turn on Tailscale SSH, then close every inbound port. Start Vault and load the API keys. Install the OpenBot server with Docker Compose, sign it in, connect Telegram as a direct chat, and make Pattie the Telegram Orchestrator. *Done when the owner can chat with Pattie in Telegram and no key sits in a plain file.*
+1. **VPS, Tailscale, Vault, OpenBot and Telegram.** Create a Hostinger Ubuntu and Docker VPS. Join it to the tailnet, turn on Tailscale SSH, then close every inbound port. In 1Password, create the Pattie vaults and service accounts, load the API keys, and put the token files on the VPS. Install the OpenBot server with Docker Compose, sign it in, connect Telegram as a direct chat, and make Pattie the Telegram Orchestrator. *Done when the owner can chat with Pattie in Telegram and no secret except the 1Password token files sits on the VPS.*
 2. **Proactive message test.** Create the "calendar event" routine and start it from the local API with a fake event. *Done when the routine posts into the Telegram chat.* This is the riskiest OpenBot assumption (FAQ 1), so test it early.
-3. **Search and cart link.** Build the Pattie tools MCP server with `search_products` and `build_cart_link`, reading keys from Vault. *Done when "find me a power bank" returns a photo, a price and a working cart link.*
+3. **Search and cart link.** Build the Pattie tools MCP server with `search_products` and `build_cart_link`, reading keys from 1Password. *Done when "find me a power bank" returns a photo, a price and a working cart link.*
 4. **Calendar trigger.** Set up OAuth, the watch channel and the webhook receiver. *Done when a new test event produces a proposal in Telegram.*
-5. **Virtual card and checkout.** Issue the card with its limits, save it in the owner's Amazon account, store the details and Amazon cookies in Vault, write `policy.yaml`, and build `check_policy`, `checkout` and `card_status`. *Done when a yes in Telegram places a real low-cost order, and an order over the limit is blocked and falls back to a cart link.*
+5. **Virtual card and checkout.** Issue the card with its limits, save it in the owner's Amazon account, store the details and Amazon cookies in 1Password, write `policy.yaml`, and build `check_policy`, `checkout` and `card_status`. *Done when a yes in Telegram places a real low-cost order, and an order over the limit is blocked and falls back to a cart link.*
 6. **Cognee.** Profile, delivery addresses and decisions, used by `suggest_items` and the one-vs-three rule.
 7. **Tracing.** Amplitude events with `trace_id`; Statsig flags, starting with `kill_switch_amazon`, `checkout_mode`, `model_route` and `sponsored_policy`.
 8. **Location and food.** `where_am_i` and the food-nudge scheduling.
@@ -545,7 +546,7 @@ These were open and are now settled. They're listed so readers of older versions
 
 - **Interface:** Telegram, through OpenBot's built-in connector. TENETS.md is updated; the PRD isn't yet (question 6).
 - **Model:** open-weight first, Claude Sonnet as fallback, routed per step with the `model_route` flag.
-- **Secrets:** all access keys, the Amazon session and the card details live in Vault.
+- **Secrets:** all access keys, the Amazon session and the card details live in 1Password (Pattie vaults), read through service accounts. Replaces the earlier self-hosted Vault plan.
 - **Payments:** Pattie logs in and pays with a virtual card with spend limits, governed by the spending policy. Cart links remain the fallback. The PRD reflects this.
 
 ### About OpenBot and Telegram
@@ -560,12 +561,12 @@ The docs say files up to 20 MB go both ways, but not whether an image appears as
 Only OpenBot's own **Approve/Deny** and **Stop** buttons are documented. Until custom buttons are supported, the owner types replies. One option to test: make `checkout` require an OpenBot approval, so the **Approve** button becomes the "yes, buy" tap.
 
 **4. Is routing every message through OpenBot's relay acceptable under tenet 1 (ownership)?**
-OpenBot owns the bot and its token, and messages pass through OpenBot's service on the way to the VPS. The data at rest stays on the owner's server, in Cognee and in Vault. Full ownership of the channel would need a bot the owner creates with BotFather and a small bridge, giving up the built-in connector.
+OpenBot owns the bot and its token, and messages pass through OpenBot's service on the way to the VPS. The data at rest stays on the owner's server and in Cognee; secrets stay in the owner's 1Password account. Full ownership of the channel would need a bot the owner creates with BotFather and a small bridge, giving up the built-in connector.
 
 **5. Does the hackathon count as noncommercial use under OpenBot's license?**
 Probably, since nothing is sold. A commercial Pattie would need a commercial OpenBot license or a different runtime.
 
-### About payments and Vault
+### About payments and secrets
 
 **6. Which card issuer?**
 It needs per-card spend limits, ideally merchant locks, an API to read transactions and freeze the card, and authorization webhooks. Candidates: Privacy.com for a personal card, or Lithic or Stripe Issuing for a programmable card (these usually need a business account). Visa and Mastercard's agent-payment programs are worth checking for later. *Decide at kickoff, based on what can be issued today.*
@@ -580,13 +581,13 @@ The PRD requires an explicit yes for every purchase, so the auto-approve thresho
 The PRD in this repo now says Pattie logs in and purchases with the virtual card after the user's yes. The living Claude doc linked at the top of the PRD hasn't been updated yet, so Emmalou should copy the change there, or point the link at the repo version.
 
 **10. How does Pattie stay logged in to Amazon, and what about one-time codes?**
-The design stores the owner's Amazon session cookies in Vault and reuses them in a persistent Tilion session. Amazon may still ask for a password or a one-time code. Pattie then asks the owner in Telegram, and the owner completes the step. Pattie never stores the Amazon password. *To settle:* test how long a session lasts before Amazon asks again.
+The design stores the owner's Amazon session cookies in 1Password and reuses them in a persistent Tilion session. Amazon may still ask for a password or a one-time code. Pattie then asks the owner in Telegram, and the owner completes the step. Pattie never stores the Amazon password. *To settle:* test how long a session lasts before Amazon asks again.
 
 **11. Is Tilion acceptable in the payment path?**
 During checkout, Tilion's cloud browser displays the payment page, and the card details are typed into it if Amazon asks for them. That makes Tilion part of the trust chain for card data. The mitigations: the card is virtual and limited, most checkouts use the card already saved on Amazon, and the card can be frozen at once. *Confirm Tilion's data-handling terms, or use a self-hosted Fortress browser for checkout only.*
 
-**12. Self-hosted Vault or a managed secrets service?**
-Self-hosted Vault or OpenBao keeps everything on the owner's server (tenet 1) but needs unsealing after reboots. A managed service (HCP Vault, 1Password Secrets Automation, Infisical) is simpler and handles updates (tenet 2). *Pick one before build step 1.*
+**12. Does the 1Password plan include service accounts, and how many?**
+The design uses two service accounts (one for the Pattie vault, one for the card vault only). *To settle it:* check service accounts in the 1Password admin settings. If only one is available, keep the card in the Pattie vault and limit card reads to the `checkout` code path, logged to Amplitude.
 
 **13. Does agent checkout make the Amazon account risk worse?**
 Yes. Context.md explains that an undeclared agent operating the owner's account breaks Amazon's terms, and the likely result is a suspended account. Agent checkout means Pattie is logged in to the account, which raises that risk. `checkout_mode` can switch to cart links instantly.

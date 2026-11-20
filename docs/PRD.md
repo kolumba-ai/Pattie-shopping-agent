@@ -32,7 +32,7 @@ The hackathon goal is one reliable end-to-end demo: a calendar event becomes a T
 - Fully autonomous checkout without user confirmation.
 - Getting around platform bot detection, or clicking or buying ads automatically.
 - Supporting every event type; we cover four in the demo.
-- Storing the user's Amazon password. The user signs in once; Pattie keeps only the resulting session, in the vault.
+- Storing the user's Amazon password. The user signs in once; Pattie keeps only the resulting session, in 1Password.
 - Paying with anything other than Pattie's virtual card.
 - Automated checkout on DoorDash or Uber Eats. Food stays a deep link for the demo.
 
@@ -179,14 +179,14 @@ Pattie logs in to the user's Amazon account and checks out for them, after the u
 **Logging in**
 
 - The user signs in to Amazon once, in Pattie's browser session, and types the password themselves.
-- Pattie stores only the resulting session cookies, in the vault. It never sees or stores the password.
+- Pattie stores only the resulting session cookies, in 1Password. It never sees or stores the password.
 - When Amazon asks for a password or a one-time code again, Pattie asks the user in chat, and the user completes the step.
 
 **Paying: the virtual card**
 
 - A virtual card issued only for Pattie, separate from the user's other cards, and saved as a payment method in the user's Amazon account.
 - **Hard limits at the card issuer:** a per-purchase cap, a monthly cap, and a merchant lock where the issuer supports it. A charge over a limit is declined, whatever happens on Pattie's side.
-- The card details live only in the vault and at the issuer. They never pass through the model, the chat or the logs.
+- The card details live only in 1Password and at the issuer. They never pass through the model, the chat or the logs.
 - The user can ask "freeze the card" or "how much have you spent this month?" in chat.
 
 **Spending policy**
@@ -243,7 +243,7 @@ Pattie runs as an OpenBot agent on a Hostinger VPS and talks to the owner in Tel
 | Calendar | Google Calendar API, read-only | Push notifications (`events.watch`) plus sync tokens, so only changed events are fetched; a fallback poll catches missed pushes. The demo account uses a service account with the calendar shared read-only (`pattie/sources.py`) |
 | Agent | Open-weight model preferred, Claude Sonnet as fallback, with tool calls (event classification currently runs on Claude Sonnet 5.5) | Tools: classify_event, suggest_items, search_products, rank_products, check_policy, checkout, card_status, build_cart_link, add_to_basket, suggest_food |
 | Payments | Virtual card from a card issuer with an API | Hard limits at the issuer; spending policy in Pattie; freeze from chat |
-| Secrets | Vault | Holds API keys, the Amazon session and the card details |
+| Secrets | 1Password (service accounts) | Holds API keys, the Amazon session and the card details, in vaults made for Pattie |
 | Product search | PA-API / Creators API, or a curated catalog fallback | Returns ASIN, title, price, rating, delivery estimate, sponsored flag |
 | Price watch | Keepa API + daily cron job | Checks basket prices and fires the order triggers |
 | Food | Deep links to DoorDash / Uber Eats, optional Instacart | Order text written by the agent |
@@ -316,7 +316,7 @@ Partner call-outs are in brackets; several judges come from these partners.
 - [x] Seed calendar and demo persona memory — Emmalou
 - [ ] Backend, Telegram, Calendar, agent tools — Mauricio
 - [ ] Product catalog / PA-API keys and Keepa key — owner to be decided
-- [ ] Virtual card issued with limits, Amazon sign-in, vault set up — owner to be decided
+- [ ] Virtual card issued with limits, Amazon sign-in, 1Password vaults and service accounts set up — owner to be decided
 - [ ] Dry run of the full demo twice before judging — both
 
 ## Risks and open questions
@@ -331,7 +331,7 @@ Partner call-outs are in brackets; several judges come from these partners.
 | Calendar privacy concerns | Users won't connect it | Read-only scope, only titles/times/locations used, clear opt-in |
 | Amazon flags or suspends the account for agent activity | User loses their Amazon account | One switch turns agent checkout off and falls back to cart links; see Context.md on Amazon's terms |
 | Wrong item or amount bought | Money lost | Yes required, total checked against the approved amount, hard card limits, Amazon returns |
-| Card details leak | Fraudulent charges | Virtual card with low limits, details only in the vault, freeze from chat |
+| Card details leak | Fraudulent charges | Virtual card with low limits, details only in 1Password, freeze from chat |
 | Login challenge or one-time code during checkout | Order stalls | Pattie asks the user in chat; falls back to a cart link |
 | Checkout breaks live on stage | Demo fails | Pre-test the exact item; cart link fallback is automatic |
 

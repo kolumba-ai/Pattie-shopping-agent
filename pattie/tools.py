@@ -6,7 +6,7 @@ Kept free of MCP so they can be tested directly:
     tools.find_offers("power bank", "Anker power bank", "accessories", specific=True, days_until=1)
     tools.check_policy(29.99, ["Anker Power Bank"], owner_approved=True)
 
-Secrets (Tilion key, later the card and Amazon session from Vault) are read inside the
+Secrets (Tilion key, later the card and Amazon session from 1Password) are read inside the
 tools and never returned to the agent.
 """
 
