@@ -19,6 +19,11 @@ EVENT_TYPES = [
     "full_day_event", "meetup_or_day_event", "routine", "other",
 ]
 
+ITEM_CATEGORIES = [
+    "accessories", "travel", "toiletries", "gifts", "gift extras",
+    "food and drinks", "clothing", "other",
+]
+
 SYSTEM = """You are Pattie's event classifier. Pattie is a shopping assistant that reads a \
 person's calendar and proactively offers to buy things they may need for upcoming events. \
 It always asks before buying, so a wrong "yes" costs the user an annoying message. \
@@ -45,8 +50,20 @@ changed your pick (e.g. "you skipped energy drinks last time, so cold brew inste
 When products are needed, suggest at most 5 item types (generic types like "travel \
 adapter", not brands or listings), most useful first, each with a short reason tied to \
 this specific event (destination, length, who it's for). List only items you actually \
-recommend buying; never list an item just to say it isn't needed. Use the title, location, \
-duration and description. Don't invent facts the event doesn't support."""
+recommend buying; never list an item just to say it isn't needed.
+
+For each item also give:
+- search_query: what Pattie should type into Amazon search, 2-6 words. Put a preferred \
+brand or a must-have from memory in it ("Anker power bank", "unscented travel toiletries \
+kit", "vegetarian protein bars").
+- category: accessories (chargers, cables, gadgets), travel, toiletries, gifts (the main \
+present), gift extras (card, wrapping), food and drinks, clothing, or other.
+- specific: true if the event and memory make clear exactly which kind of product fits \
+(Pattie can offer one best pick); false if it's a matter of taste the owner should choose \
+(Pattie offers three options).
+
+Use the title, location, duration and description. Don't invent facts the event doesn't \
+support."""
 
 SCHEMA = {
     "type": "object",
@@ -60,8 +77,18 @@ SCHEMA = {
                 "properties": {
                     "item": {"type": "string"},
                     "reason": {"type": "string"},
+                    "search_query": {
+                        "type": "string",
+                        "description": "What to type into Amazon search to find this, 2-6 words.",
+                    },
+                    "category": {"type": "string", "enum": ITEM_CATEGORIES},
+                    "specific": {
+                        "type": "boolean",
+                        "description": "True if the event makes clear exactly what kind of "
+                                       "product fits; false if the owner should choose.",
+                    },
                 },
-                "required": ["item", "reason"],
+                "required": ["item", "reason", "search_query", "category", "specific"],
                 "additionalProperties": False,
             },
         },

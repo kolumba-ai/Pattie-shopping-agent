@@ -1,0 +1,27 @@
+{
+  "_about": "Exact values the ranking needs (in production: Postgres). Cognee holds the same facts as text for Claude (demo/anna_susan_profile.md). Categories match ITEM_CATEGORIES in pattie/classifier.py. Demo persona, made up.",
+  "has_prime": false,
+  "budgets": {
+    "accessories": 40,
+    "travel": 30,
+    "toiletries": 30,
+    "gifts": {
+      "min": 40,
+      "max": 60
+    },
+    "gift extras": 15,
+    "food and drinks": 25
+  },
+  "preferred_brands": [
+    "Anker"
+  ],
+  "require_tags": {
+    "toiletries": [
+      "unscented"
+    ]
+  },
+  "avoid_tags": [
+    "energy drink",
+    "meat"
+  ]
+}

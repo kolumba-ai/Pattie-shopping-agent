@@ -23,13 +23,14 @@ from datetime import datetime, timedelta
 import anthropic
 
 from .classifier import Classifier, ClassifierError
+from .ranking import format_offer
 from .sources import GoogleCalendarSource, IcsFileSource, ZoneInfo, parse_time
 from .store import Store
 
 LOOKAHEAD_DAYS = 30  # PRD flow 1
 
 
-def poll(source, store, classifier, now: datetime, tz: str, out=print) -> list:
+def poll(source, store, classifier, now: datetime, tz: str, out=print, offers_fn=None) -> list:
     """One pass: pull changes, record them, classify anything new in the window."""
     changes = source.fetch_changes()
     for ev in changes:
@@ -52,6 +53,11 @@ def poll(source, store, classifier, now: datetime, tz: str, out=print) -> list:
         except anthropic.APIStatusError as e:
             out(f"  ! Claude API error for '{ev['title']}': {e.status_code} {e.message}")
             continue
+        if offers_fn and decision["needs_products"]:
+            try:
+                decision["offers"] = offers_fn(decision)
+            except Exception as e:  # search is best effort; the decision still stands
+                out(f"  ! Amazon search failed for '{ev['title']}': {e}")
         store.save_decision(ev["id"], decision, now.isoformat())
         decisions.append((ev, decision))
         out(format_decision(ev, decision))
@@ -69,6 +75,8 @@ def format_decision(ev: dict, d: dict) -> str:
         lines += [f"       - {i['item']}: {i['reason']}" for i in d["items"]]
     else:
         lines.append(f"     skip: {d['summary']}")
+    for o in d.get("offers", []):
+        lines.append(format_offer(o))
     for n in d["food_nudges"]:
         lines.append(f"     food: ask about {n['meal']} at {n['ask_at']} ({n['reason']})")
     return "\n".join(lines)
@@ -107,6 +115,11 @@ def main(argv=None) -> None:
                    help="decide without Cognee memory (faster, no personalization)")
     p.add_argument("--user", default=os.environ.get("PATTIE_USER", "anna_susan"),
                    help="whose memory to use")
+    p.add_argument("--prefs", default=os.environ.get("PATTIE_PREFS", "demo/anna_susan_prefs.json"),
+                   help="exact preferences for ranking (budgets, brands, must-haves)")
+    p.add_argument("--search-results",
+                   help="rank saved Amazon results from this JSON file instead of searching live")
+    p.add_argument("--no-search", action="store_true", help="don't search Amazon for products")
     args = p.parse_args(argv)
 
     store = Store(args.db)
@@ -129,6 +142,23 @@ def main(argv=None) -> None:
             print(f"! Cognee memory unavailable, continuing without it: {e}", file=sys.stderr)
     classifier = Classifier(args.tz, memory)
 
+    offers_fn = None
+    if not args.no_search and os.path.exists(args.prefs):
+        from .offers import amazon_live_search, make_offers, saved_search
+        from .ranking import load_json
+
+        prefs = load_json(args.prefs)
+        search = None
+        if args.search_results:
+            search = saved_search(args.search_results)
+        elif os.environ.get("TILION_API_KEY"):
+            search = amazon_live_search
+        else:
+            print("! No TILION_API_KEY: skipping Amazon search (use --search-results FILE "
+                  "to rank saved results)", file=sys.stderr)
+        if search:
+            offers_fn = lambda decision: make_offers(decision, prefs, search)  # noqa: E731
+
     tz = ZoneInfo(args.tz)
     fixed_now = datetime.fromisoformat(args.now).replace(tzinfo=tz) if args.now else None
     started = datetime.now(tz)
@@ -146,7 +176,7 @@ def main(argv=None) -> None:
           f"(every {args.interval}s, now = {clock():%Y-%m-%d %H:%M %Z}, "
           f"memory {'on for ' + args.user if memory else 'off'})", file=sys.stderr)
     while True:
-        for ev, d in poll(source, store, classifier, clock(), args.tz, out):
+        for ev, d in poll(source, store, classifier, clock(), args.tz, out, offers_fn):
             if args.json:
                 print(json.dumps({"event": ev, "decision": d}), flush=True)
         if args.once:

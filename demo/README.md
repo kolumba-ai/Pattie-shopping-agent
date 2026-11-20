@@ -117,3 +117,32 @@ gardening gift for Lisa instead of another cookbook.
 - Each event costs one extra Claude call for the memory lookup (about 5 to 10 seconds).
 - Why Turso and not Cognee's default graph DB: the default (Ladybug) needs Homebrew's OpenSSL.
   `pattie/memory.py` explains the small workaround that makes Turso start cleanly.
+
+## 6. Products from Amazon (search and ranking)
+
+For each item Pattie suggests, Claude also writes an Amazon search term that uses memory
+("Anker power bank", "unscented travel toiletries kit TSA"), a category and whether the choice
+is obvious. Then:
+
+1. `pattie/offers.py` searches Amazon live through Tilion, reusing `amazon_search.py`
+   (sold by Amazon.com only). Needs `TILION_API_KEY` in the environment or `.env`.
+2. `pattie/ranking.py` picks what to show (PRD flow 4):
+   - drops products over the owner's budget for the category, missing a must-have
+     (unscented toiletries), or containing something they avoid (energy drinks, meat);
+   - scores preferred brand, rating, reviews, price and delivery; **Sponsored gets no boost**;
+   - **one best pick** when the budget is known, the item is specific, and one product is
+     clearly ahead; otherwise **three options**, each labeled with its real trade-off
+     (cheapest, best rated, arrives soonest);
+   - over the $75 per-purchase limit: a cart link instead of an order.
+3. Exact values for ranking (budgets, brands, must-haves) are in `demo/anna_susan_prefs.json`
+   (Postgres later). Cognee has the same facts as text for Claude.
+
+```bash
+.venv/bin/python -m pattie.watcher                                  # live Amazon search
+.venv/bin/python -m pattie.watcher --search-results saved.json      # rank saved results
+.venv/bin/python tests/test_ranking.py                              # ranking tests
+```
+
+Note for `amazon_search.py`: it doesn't read delivery dates yet. Until it does, Pattie can't
+filter out items that arrive after the event, and it never claims "arrives soonest" (the third
+option becomes "most reviewed" or "good all-rounder").
