@@ -61,6 +61,9 @@ def poll(source, store, classifier, now: datetime, tz: str, out=print) -> list:
 def format_decision(ev: dict, d: dict) -> str:
     head = f"  -> {ev['title']} ({d['event_type']}, in {d['days_until']} days)"
     lines = [head]
+    if d.get("memory"):
+        first = d["memory"].replace("\n", " ")
+        lines.append(f"     memory: {first[:220]}{'...' if len(first) > 220 else ''}")
     if d["needs_products"]:
         lines.append(f"     NEEDS STUFF [{d['urgency_tier']}]: {d['summary']}")
         lines += [f"       - {i['item']}: {i['reason']}" for i in d["items"]]
@@ -100,6 +103,10 @@ def main(argv=None) -> None:
     p.add_argument("--once", action="store_true", help="poll once and exit")
     p.add_argument("--now", help="override the clock, e.g. 2026-11-20T20:00 (demo time travel)")
     p.add_argument("--json", action="store_true", help="print decisions as JSON lines")
+    p.add_argument("--no-memory", action="store_true",
+                   help="decide without Cognee memory (faster, no personalization)")
+    p.add_argument("--user", default=os.environ.get("PATTIE_USER", "anna_susan"),
+                   help="whose memory to use")
     args = p.parse_args(argv)
 
     store = Store(args.db)
@@ -113,7 +120,14 @@ def main(argv=None) -> None:
     if not key.startswith("sk-ant-") or len(key) < 40:
         p.error("ANTHROPIC_API_KEY is missing or looks like a placeholder. "
                 "Paste your real key after ANTHROPIC_API_KEY= in the .env file.")
-    classifier = Classifier(args.tz)
+    memory = None
+    if not args.no_memory:
+        try:
+            from .memory import Memory
+            memory = Memory(args.user)
+        except Exception as e:
+            print(f"! Cognee memory unavailable, continuing without it: {e}", file=sys.stderr)
+    classifier = Classifier(args.tz, memory)
 
     tz = ZoneInfo(args.tz)
     fixed_now = datetime.fromisoformat(args.now).replace(tzinfo=tz) if args.now else None
@@ -129,7 +143,8 @@ def main(argv=None) -> None:
             print(_msg, file=sys.stderr)
 
     print(f"Watching {'file ' + args.ics if args.ics else args.calendar_id} "
-          f"(every {args.interval}s, now = {clock():%Y-%m-%d %H:%M %Z})", file=sys.stderr)
+          f"(every {args.interval}s, now = {clock():%Y-%m-%d %H:%M %Z}, "
+          f"memory {'on for ' + args.user if memory else 'off'})", file=sys.stderr)
     while True:
         for ev, d in poll(source, store, classifier, clock(), args.tz, out):
             if args.json:

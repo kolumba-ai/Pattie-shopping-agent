@@ -36,9 +36,16 @@ Event types and typical needs:
 - routine: never needs anything
 - other: anything else
 
+You may also get what Pattie remembers about the person (budgets, brands, things they \
+already own, dislikes, people involved, past accepted or declined suggestions). Treat it \
+as true and let it shape the decision: don't suggest things they already own or have \
+declined before, prefer what they like, and mention the memory in the reason when it \
+changed your pick (e.g. "you skipped energy drinks last time, so cold brew instead").
+
 When products are needed, suggest at most 5 item types (generic types like "travel \
 adapter", not brands or listings), most useful first, each with a short reason tied to \
-this specific event (destination, length, who it's for). Use the title, location, \
+this specific event (destination, length, who it's for). List only items you actually \
+recommend buying; never list an item just to say it isn't needed. Use the title, location, \
 duration and description. Don't invent facts the event doesn't support."""
 
 SCHEMA = {
@@ -69,15 +76,17 @@ SCHEMA = {
 
 
 class Classifier:
-    def __init__(self, tz: str):
+    def __init__(self, tz: str, memory=None):
         self.client = anthropic.Anthropic()
         self.tz = tz
+        self.memory = memory  # pattie.memory.Memory, or None to run without memory
 
     def decide(self, event: dict, now: datetime) -> dict:
         start = parse_time(event["start"], self.tz)
         end = parse_time(event["end"], self.tz)
         days_until = (start.date() - now.date()).days
-        products = self._classify_products(event, start, end, now)
+        remembered = self._remembered(event)
+        products = self._classify_products(event, start, end, now, remembered)
         if not products["needs_products"]:
             products["items"] = []
         return {
@@ -85,10 +94,20 @@ class Classifier:
             "days_until": days_until,
             "urgency_tier": urgency_tier(days_until) if products["needs_products"] else None,
             "food_nudges": food_nudges(event, start, end),
+            "memory": remembered,
             "model": MODEL,
         }
 
-    def _classify_products(self, event, start, end, now) -> dict:
+    def _remembered(self, event) -> str:
+        if self.memory is None:
+            return ""
+        try:
+            return self.memory.context_for_event(event)
+        except Exception as e:  # memory is a bonus; never block a decision on it
+            print(f"  ! memory lookup failed, deciding without it: {e}")
+            return ""
+
+    def _classify_products(self, event, start, end, now, remembered="") -> dict:
         hours = round((end - start).total_seconds() / 3600, 1)
         prompt = (
             f"Today is {now:%A %Y-%m-%d %H:%M} ({self.tz}).\n\n"
@@ -100,7 +119,8 @@ class Classifier:
             f"- Location: {event['location'] or '(none)'}\n"
             f"- Attendees: {event['attendees']}\n"
             f"- Description: {event['description'] or '(none)'}\n\n"
-            "Classify this event and decide whether Pattie should offer to buy anything for it."
+            + (f"What Pattie remembers about this person:\n{remembered}\n\n" if remembered else "")
+            + "Classify this event and decide whether Pattie should offer to buy anything for it."
         )
         response = self.client.beta.messages.create(
             model=MODEL,

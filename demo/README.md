@@ -53,9 +53,14 @@ Read with the `https://www.googleapis.com/auth/calendar.readonly` scope.
 
 ## 4. Run the calendar watcher
 
+Needs Python 3.10 or newer (Cognee requires it). If your Mac only has Python 3.9, `uv` installs
+a newer one without Homebrew:
+
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+python3 -m pip install --user uv
+python3 -m uv python install 3.12
+python3 -m uv venv --python 3.12 .venv
+python3 -m uv pip install --python .venv/bin/python -r requirements.txt
 .venv/bin/python -m pattie.set_key     # paste your Claude API key; saved to .env (git-ignored)
 .venv/bin/python -m pattie.watcher \
     --calendar-id <calendar id> \
@@ -89,3 +94,26 @@ Test without Google, using the seed file:
 ```bash
 .venv/bin/python -m pattie.watcher --ics demo/pattie-demo-calendar.ics --once --db /tmp/pattie-test.sqlite3
 ```
+
+## 5. Memory (Cognee)
+
+Pattie remembers its owner with [Cognee](https://github.com/topoteretes/cognee): budgets, brands,
+things they already own, dislikes, people in their life, and which suggestions they accepted or
+declined. The watcher asks Cognee what matters for each event before Claude decides, so the
+picks get personal: cold brew instead of energy drinks, no neck pillow if she owns one, a
+gardening gift for Lisa instead of another cookbook.
+
+```bash
+.venv/bin/python -m pattie.memory seed demo/anna_susan_profile.md     # load the demo persona
+.venv/bin/python -m pattie.memory ask "What's Anna Susan's gift budget?"
+.venv/bin/python -m pattie.memory note "Anna Susan declined the cold brew for Hackathon SF"
+.venv/bin/python -m pattie.memory reset                                # forget everything
+```
+
+- Everything stays on this machine, in `.cognee/` (git-ignored): Turso graph, LanceDB vectors,
+  SQLite. Embeddings come from a small local model, Claude is the LLM, and Cognee telemetry is off.
+  That fits our "Ownership" tenet.
+- The watcher uses memory automatically; `--no-memory` turns it off, `--user` picks whose memory.
+- Each event costs one extra Claude call for the memory lookup (about 5 to 10 seconds).
+- Why Turso and not Cognee's default graph DB: the default (Ladybug) needs Homebrew's OpenSSL.
+  `pattie/memory.py` explains the small workaround that makes Turso start cleanly.
