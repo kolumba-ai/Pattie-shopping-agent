@@ -8,6 +8,8 @@ Nov 20, 2026 · Emmalou Schmucker (product) · Living version: [Claude doc](http
 
 Pattie is a shopping agent that lives in Telegram and reads your Google Calendar. It spots events that need stuff (trips, parties, hackathons), proposes what you might need, finds it on Amazon, gets your yes, and then buys it for you with its own virtual card, within spending limits you set. It also handles food: when your day is packed, it asks ahead whether to order breakfast or dinner from DoorDash or Uber Eats.
 
+Pattie serves two kinds of customers: individuals, and small businesses that want their routine purchasing handled the same way, from the company calendar.
+
 **The problem.** Shopping tools wait for you to search. People forget the power bank before the flight, or end up hungry and ordering junk at 9pm after a full-day event. The calendar already knows what's coming, but nothing acts on it.
 
 **The bet.** A calendar event is a strong signal of intent. An agent that turns events into a short, explained shortlist and asks one clear question saves time without taking control away. Pattie is named after Pattie Maes, and follows her principles: learn from the person, recommend for the situation, stay proactive, support judgment instead of replacing it, and keep sponsored placement separate from fit.
@@ -45,7 +47,18 @@ The hackathon goal is one reliable end-to-end demo: a calendar event becomes a T
 
 ## Users and user stories
 
-The primary user is a busy professional or student with a full calendar who travels and goes to events often, and who already shops on Amazon and orders delivery.
+Pattie has two user groups. The hackathon demo shows the individual; the small business is the second market and part of the pitch.
+
+| | Individual | Small business |
+| --- | --- | --- |
+| Who | A busy professional or student with a full calendar who travels and goes to events often, and already shops on Amazon and orders delivery | A company with about 5 to 50 people, where the owner or an office manager does the purchasing on the side |
+| Demo persona | Anna Susan, product designer in San Francisco | Maya, office manager at Brightside Studio, a 12-person design agency in Oakland (made up) |
+| Calendar Pattie reads | Their own | The company or team calendar: offsites, client workshops, trade shows, new hires' first days, office events |
+| Typical needs | Travel gear, gifts, event supplies, meals | Supplies for events and workshops, welcome kits for new hires, regular restocking (coffee, snacks, paper, cleaning supplies), team meals |
+| Who says yes | The user | Whoever holds the budget: the owner, or the office manager up to a limit |
+| What else matters | Personal taste, budget, brands | Approval rules, team and category budgets, receipts and invoices for bookkeeping, delivery to the office, Amazon Business pricing |
+
+### Individuals
 
 | # | As a user, I want… | So that… | Priority |
 | --- | --- | --- | --- |
@@ -61,6 +74,21 @@ The primary user is a busy professional or student with a full calendar who trav
 | 10 | To set budget, brands, dietary preferences and quiet hours | Pattie fits me and doesn't nag | Should |
 | 11 | Hard spending limits on Pattie's card, and a way to freeze it from chat | A mistake can't cost me much | Must |
 | 12 | A confirmation after every order with the total, arrival date and budget left | I always know what was bought | Must |
+
+### Small businesses
+
+| # | As an office manager or owner, I want… | So that… | Priority |
+| --- | --- | --- | --- |
+| B1 | Pattie to read the company calendar and propose what's needed for an offsite, a client workshop or a trade show | Events are prepared without a shopping list | Must |
+| B2 | Welcome kits ordered before a new hire's first day | New people find their laptop stand, notebook and swag on their desk | Should |
+| B3 | Recurring supplies (coffee, snacks, paper, cleaning) restocked before they run out, bundled into one order | The office never runs out, and shipping is saved | Should |
+| B4 | Purchases above a set amount to need the owner's yes, and smaller ones mine | Spending stays under control without the owner approving every pack of coffee | Must |
+| B5 | Budgets per team or category (events, office supplies, onboarding) | Each budget is tracked separately | Should |
+| B6 | Every order's invoice saved and sent to our bookkeeping | Expenses are documented without extra work | Should |
+| B7 | Ordering through our Amazon Business account, with deliveries to the office | We get business pricing, tax handling and company invoices | Could |
+| B8 | Team meals ordered for long workshops and late launch nights | The team is fed without anyone organizing it | Could |
+
+For the hackathon, the small-business persona is part of the pitch, not the live demo. Multiple users, approval chains and Amazon Business stay out of scope (see "Out of scope" under the demo).
 
 ## Core flows
 
