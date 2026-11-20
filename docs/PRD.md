@@ -251,23 +251,40 @@ Several judges come from these partners (Amplitude, Cognee, Persona, Airbyte, Su
 
 ## Hackathon demo
 
-The demo is a 3-minute live run on one phone, using a test calendar seeded with four events.
+The demo is a 3-minute live run on one phone in Telegram. The owner is **Anna Susan**, a demo persona with her own Google account (`anna.susan.demo@gmail.com`) and a calendar seeded with six events: the four below plus two everyday ones (a dentist appointment and a 1:1) that Pattie should ignore. Pattie already knows her from Cognee memory (`demo/anna_susan_profile.md`): no Prime, Anker fan, her power bank broke last month, vegetarian, no energy drinks, already owns a neck pillow and packing cubes, and her friend Lisa loves gardening and natural wine.
 
-1. **Setup (15 s).** Show the calendar: "Hackathon SF" tomorrow 8am–9pm, "Flight to NY" in 6 days, "Lisa's birthday" in 3 weeks, "AI Meetup" next week.
-2. **Proactive message (30 s).** Pattie messages on WhatsApp: "Hackathon tomorrow, 13 hours. Want a power bank and some snacks? Arrives tonight." Reply "yes, power bank".
-3. **One best option (30 s).** Budget is known, so Pattie sends one pick with its reason, price, rating and arrival time. Reply "yes". Pattie places the order and replies with the confirmation, arrival time and budget left. Show the order in Amazon's order history.
-4. **Three options (30 s).** For the flight, Pattie can't tell what kind of adapter is needed, so it sends three labeled options, one marked "Sponsored". Explain why it ranks where it does.
-5. **Long-term basket (30 s).** The birthday gift goes into the basket: "$22 of $35. I'll wait and watch the price." Show the basket view and a simulated price drop that triggers the "Order now?" question. Also show the policy at work: an item over the per-purchase limit gets a cart link instead of an order.
-6. **Food nudge (30 s).** Fast-forward to 8pm: "Hackathon starts at 8 tomorrow. Breakfast to the venue at 8:15?" Reply "yes", get the DoorDash link with the order written out.
-7. **Close (15 s).** Pattie acted on the calendar, explained every pick, labeled sponsored items, bought on its own card within hard limits, and never bought anything without a yes.
+Partner call-outs are in brackets; several judges come from these partners.
 
-**In scope:** flows 1–6 for the four seeded events, one test user, a curated catalog if the API keys don't arrive, one real low-cost order on the virtual card.
+1. **Setup (15 s).** Show Anna Susan's calendar: "Hackathon SF" tomorrow 8am–9pm, "Flight to NY" in 6 days, "Lisa's birthday" in 3 weeks, "AI Meetup" next week, plus the dentist and the 1:1. "Pattie watches this calendar. It already decided the dentist and the 1:1 need nothing, so it stayed quiet." *[Google Calendar push, Airbyte for history]*
+2. **Proactive message (30 s).** Pattie messages in Telegram, unprompted: "Hackathon SF tomorrow, 8am to 9pm. Your power bank broke last month. Want an Anker one, plus cold brew and some vegetarian snacks? It all arrives tonight." Point out the memory: cold brew instead of energy drinks, because she turned those down at her last hackathon. Reply "yes, power bank and cold brew". *[Cognee]*
+3. **One best option (30 s).** Her accessory budget ($40) and brand (Anker) are known, so Pattie sends one pick with a photo, price, rating, arrival time and reason. Reply "yes". Pattie checks the spending policy, places the order on its virtual card and replies with the confirmation, arrival time and budget left. Show the order in Amazon's order history. *[Statsig `checkout_mode` flag]*
+4. **Memory changes the next proposal, and three options (40 s).** Pattie moves on to the flight: "Flight to NY on Thursday. You already have a neck pillow, packing cubes and now a power bank, so just unscented travel-size toiletries?" Reply "yes". She has no favorite toiletry brand, so the choice isn't obvious: Pattie sends three labeled options (cheapest, best rated, arrives soonest), one marked "Sponsored", and says why each ranks where it does. *[Cognee; Superlinked if used for ranking]*
+5. **Long-term basket and limits (30 s).** For Lisa's birthday in 3 weeks, Pattie suggests a gardening gift or a natural-wine accessory, "not another cookbook like last year." Pick the $22 wine aerator: it goes into the basket, "$22 of $35. I'll watch the price and order by Dec 6 at the latest." Trigger a simulated price drop: "Price dropped 18%. Order now?" Then ask for the $89 gardening set: it's over the $75 per-purchase limit, so Pattie sends a cart link instead of buying. *[Cognee]*
+6. **Food nudge (25 s).** Fast-forward the clock to 8pm: "Hackathon starts at 8 tomorrow. Your usual oat milk latte and everything bagel, delivered to the venue at 8:15?" Reply "yes" and get the DoorDash link with the order written out.
+7. **Close (10 s).** Show this run's trace in Amplitude. "Pattie acted on the calendar, remembered what Anna Susan likes and owns, explained every pick, labeled sponsored items, bought on its own card within hard limits, and never bought anything without a yes." *[Amplitude, Persona if the verified-agent check is in]*
+
+**Before the demo**
+
+- Calendar: the six events from `demo/pattie-demo-calendar.ics`, regenerated for the demo day (`python demo/gen_seed_calendar.py --demo-date YYYY-MM-DD`) and re-imported.
+- Memory: `python -m pattie.memory reset`, then `seed demo/anna_susan_profile.md`, so earlier rehearsals don't leak into the demo.
+- Decisions: clear processed events, so Pattie proposes again on stage.
+- Virtual card funded, Amazon session valid, Telegram open on the demo phone, Amplitude dashboard open on the laptop.
+
+**If something breaks on stage**
+
+- Checkout fails: Pattie falls back to the cart link (the same path as the over-limit case), so say so and keep going.
+- Calendar push is slow: trigger the "calendar event" routine by hand with the event payload.
+- The clock jump for the food nudge: use the watcher's `--now` option or start the routine directly.
+- Keep a screen recording of a full dry run as a last resort.
+
+**In scope:** flows 1–6 for the four demo events, one test user, a curated catalog if the API keys don't arrive, one real low-cost order on the virtual card.
 **Out of scope:** onboarding UI, multiple users, automated food checkout, Uber Eats integration beyond a link.
 
 **Owners**
 
-- [ ] Product spec, demo script, seed calendar, pitch — Emmalou
-- [ ] Backend, WhatsApp, Calendar, agent tools — Mauricio
+- [ ] Product spec, demo script, pitch — Emmalou
+- [x] Seed calendar and demo persona memory — Emmalou
+- [ ] Backend, Telegram, Calendar, agent tools — Mauricio
 - [ ] Product catalog / PA-API keys and Keepa key — owner to be decided
 - [ ] Virtual card issued with limits, Amazon sign-in, vault set up — owner to be decided
 - [ ] Dry run of the full demo twice before judging — both
