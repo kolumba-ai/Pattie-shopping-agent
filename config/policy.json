@@ -1,0 +1,14 @@
+{
+  "_about": "Pattie's spending policy (ARCHITECTURE.md, 'The spending policy'). Example values; the owner sets the real ones. The card issuer enforces its own hard limits on top of these.",
+  "per_purchase_limit": 75,
+  "daily_limit": 150,
+  "monthly_limit": 400,
+  "auto_approve_threshold": 0,
+  "price_tolerance_pct": 5,
+  "allowed_merchants": ["amazon"],
+  "blocked_keywords": [
+    "gift card", "giftcard", "egift", "prepaid card", "bitcoin", "crypto", "subscription",
+    "subscribe & save", "membership"
+  ],
+  "quiet_hours": {"start": "22:00", "end": "07:00"}
+}

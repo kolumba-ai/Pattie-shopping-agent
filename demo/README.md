@@ -146,3 +146,36 @@ is obvious. Then:
 Note for `amazon_search.py`: it doesn't read delivery dates yet. Until it does, Pattie can't
 filter out items that arrive after the event, and it never claims "arrives soonest" (the third
 option becomes "most reviewed" or "good all-rounder").
+
+## 7. Pattie tools MCP server (for OpenBot)
+
+`pattie/mcp_server.py` exposes Pattie's tools to the OpenBot agent over MCP
+(ARCHITECTURE.md, "Tools"). It wraps the search and ranking above and adds the spending policy,
+a purchase ledger, location and shopping-hours timing.
+
+```bash
+.venv/bin/python -m pattie.mcp_server            # stdio: OpenBot starts it as a command
+.venv/bin/python -m pattie.mcp_server --http     # or streamable HTTP on 127.0.0.1:8765
+.venv/bin/python -m pytest tests/                # all tests, no network
+```
+
+| Tool | What it does |
+| --- | --- |
+| `find_offers` | Search Amazon for one item and rank: one best pick or three options |
+| `search_products` | Raw results for several queries (prefer `find_offers`) |
+| `build_cart_link` | One link that adds products to the owner's own cart |
+| `check_policy` | allow / ask / wait / block against `config/policy.json`, with budget left |
+| `checkout` | Buys after a yes. **Not connected yet**: returns a cart link until the virtual card and Amazon session are set up |
+| `card_status` | Spend today and this month, what's left, recent purchases |
+| `where_am_i` / `set_location` | Current city and time zone (chat > calendar event in progress > default), where deliveries go |
+| `next_shopping_time` | When to browse next, drawn from the shopping-hours curve in local time |
+| `remember` / `recall` | Cognee memory through `pattie/memory.py` |
+
+- The spending policy lives in `config/policy.json` (example values: $75 per purchase, $150 a day,
+  $400 a month, quiet hours 10pm–7am, auto-approve at $0 so every purchase needs a yes).
+  `ranking.py` still has its own `PER_PURCHASE_LIMIT = 75`; keep the two in sync until ranking
+  reads the policy file.
+- The ledger, location facts and the watcher's events share one SQLite file (`PATTIE_DB`,
+  default `pattie.sqlite3`), so `where_am_i` sees calendar events in progress.
+- Settings: `PATTIE_TZ`, `PATTIE_HOME_CITY`, `PATTIE_PREFS`, `PATTIE_POLICY`, `PATTIE_USER`, and
+  `PATTIE_SEARCH_RESULTS` (a saved-results JSON file instead of live Amazon, as an on-stage fallback).

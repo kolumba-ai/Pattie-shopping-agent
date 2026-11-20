@@ -3,3 +3,4 @@ anthropic>=0.125.0
 google-api-python-client>=2.198.0
 google-auth>=2.50.0
 cognee[anthropic,turso]==1.6.10
+mcp>=1.12,<2
