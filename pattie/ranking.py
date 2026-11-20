@@ -216,3 +216,11 @@ def format_offer(offer: dict) -> str:
                      f"{p['rating']} stars{tag}{act}")
         lines.append(f"           {p['why']}")
     return "\n".join(lines)
+
+
+def load_json(path: str) -> dict:
+    """Read a JSON file (owner prefs, saved search results). Used by the watcher."""
+    import json
+    from pathlib import Path
+
+    return json.loads(Path(path).read_text(encoding="utf-8"))
