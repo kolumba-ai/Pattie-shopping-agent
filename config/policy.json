@@ -1,14 +1,25 @@
 {
-  "_about": "Pattie's spending policy (ARCHITECTURE.md, 'The spending policy'). Example values; the owner sets the real ones. The card issuer enforces its own hard limits on top of these.",
-  "per_purchase_limit": 75,
-  "daily_limit": 150,
-  "monthly_limit": 400,
+  "_about": "Pattie's spending policy (ARCHITECTURE.md, 'The spending policy'). Example values; the owner sets the real ones. One Privacy.com card per vendor: each vendor's monthly_limit should match its card's MONTHLY spend limit at Privacy, which declines anything over it no matter what Pattie does.",
+  "merchants": {
+    "amazon": {
+      "card": "Privacy - Pattie Amazon",
+      "per_purchase_limit": 75,
+      "daily_limit": 150,
+      "monthly_limit": 300
+    },
+    "doordash": {
+      "card": "Privacy - Pattie DoorDash",
+      "per_purchase_limit": 40,
+      "daily_limit": 80,
+      "monthly_limit": 150
+    }
+  },
+  "overall_monthly_limit": 400,
   "auto_approve_threshold": 0,
   "price_tolerance_pct": 5,
-  "allowed_merchants": ["amazon"],
   "blocked_keywords": [
     "gift card", "giftcard", "egift", "prepaid card", "bitcoin", "crypto", "subscription",
-    "subscribe & save", "membership"
+    "subscribe & save", "membership", "dashpass"
   ],
   "quiet_hours": {"start": "22:00", "end": "07:00"}
 }

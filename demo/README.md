@@ -164,17 +164,23 @@ a purchase ledger, location and shopping-hours timing.
 | `find_offers` | Search Amazon for one item and rank: one best pick or three options |
 | `search_products` | Raw results for several queries (prefer `find_offers`) |
 | `build_cart_link` | One link that adds products to the owner's own cart |
-| `check_policy` | allow / ask / wait / block against `config/policy.json`, with budget left |
-| `checkout` | Buys after a yes. **Not connected yet**: returns a cart link until the virtual card and Amazon session are set up |
-| `card_status` | Spend today and this month, what's left, recent purchases |
+| `check_policy` | allow / ask / wait / block against that vendor's limits in `config/policy.json` |
+| `checkout` | Buys after a yes, with that vendor's Privacy card. **Not connected yet**: returns a fallback (Amazon cart link, or the DoorDash restaurant link) |
+| `card_status` | Per vendor card (amazon, doordash): spend, what's left, recent purchases, state at Privacy |
+| `freeze_card` / `unfreeze_card` | Pause or reopen one vendor's Privacy card |
 | `where_am_i` / `set_location` | Current city and time zone (chat > calendar event in progress > default), where deliveries go |
 | `next_shopping_time` | When to browse next, drawn from the shopping-hours curve in local time |
 | `remember` / `recall` | Cognee memory through `pattie/memory.py` |
 
-- The spending policy lives in `config/policy.json` (example values: $75 per purchase, $150 a day,
-  $400 a month, quiet hours 10pm–7am, auto-approve at $0 so every purchase needs a yes).
-  `ranking.py` still has its own `PER_PURCHASE_LIMIT = 75`; keep the two in sync until ranking
-  reads the policy file.
+- **Cards:** one Privacy.com card per vendor, merchant-locked with a monthly limit (example
+  values: Amazon $300, DoorDash $150). `pattie/privacy_cards.py` reads card state and spend and can
+  pause a card; it never handles card numbers. Settings: `PRIVACY_API_KEY`,
+  `PATTIE_CARD_TOKEN_AMAZON`, `PATTIE_CARD_TOKEN_DOORDASH` (from 1Password), `PRIVACY_SANDBOX=1`
+  for Privacy's sandbox. Without a key, `card_status` shows Pattie's own limits only.
+- **Spending policy:** `config/policy.json`, per vendor (Amazon: $75 per purchase, $150 a day,
+  $300 a month; DoorDash: $40, $80, $150) plus $400 a month overall, quiet hours 10pm–7am, and
+  auto-approve at $0 so every purchase needs a yes. `ranking.py` still has its own
+  `PER_PURCHASE_LIMIT = 75`; keep it in sync with the Amazon limit until ranking reads the policy.
 - The ledger, location facts and the watcher's events share one SQLite file (`PATTIE_DB`,
   default `pattie.sqlite3`), so `where_am_i` sees calendar events in progress.
 - Settings: `PATTIE_TZ`, `PATTIE_HOME_CITY`, `PATTIE_PREFS`, `PATTIE_POLICY`, `PATTIE_USER`, and

@@ -66,25 +66,40 @@ def check_policy(total: float, titles: list[str], merchant: str = "amazon",
     """Check a purchase against the spending policy before buying.
 
     result is "allow", "ask" (get the owner's yes first), "wait" (quiet hours; retry_at says
-    when) or "block" (send a cart link instead). Includes what's left of today's and this
-    month's budget."""
+    when) or "block" (send a cart link instead). merchant is "amazon" or "doordash": each has
+    its own Privacy.com card and limits. Includes what's left of that card's budget."""
     return tools().check_policy(total, titles, merchant, owner_approved, urgent)
 
 
 @mcp.tool()
-def checkout(asins: list[str], approved_total: float, titles: list[str],
+def checkout(asins: list[str], approved_total: float, titles: list[str], merchant: str = "amazon",
              trace_id: Optional[str] = None) -> dict:
-    """Buy the products the owner approved. Only call after the owner said yes.
+    """Buy what the owner approved, with that vendor's Privacy.com card. Only call after a yes.
 
-    Until the virtual card and Amazon session are connected, this returns a cart link for the
-    owner to check out themselves."""
-    return tools().checkout(asins, approved_total, titles, trace_id)
+    merchant is "amazon" (asins are ASINs) or "doordash". Until agent checkout is connected,
+    this returns a fallback: an Amazon cart link, or for DoorDash an instruction to send the
+    restaurant link so the owner orders in the app with Pattie's DoorDash card."""
+    return tools().checkout(asins, approved_total, titles, merchant, trace_id)
 
 
 @mcp.tool()
-def card_status() -> dict:
-    """Spend today and this month, what's left, and recent purchases."""
-    return tools().card_status()
+def card_status(merchant: Optional[str] = None) -> dict:
+    """Each vendor card (amazon, doordash): spend today and this month, what's left, recent
+    purchases, and the card's state and limit at Privacy.com. Omit merchant for all cards."""
+    return tools().card_status(merchant)
+
+
+@mcp.tool()
+def freeze_card(merchant: str) -> dict:
+    """Pause a vendor's Privacy.com card (amazon or doordash) so every charge is declined.
+    Use when the owner says "freeze the card"; ask which one if they didn't say."""
+    return tools().freeze_card(merchant)
+
+
+@mcp.tool()
+def unfreeze_card(merchant: str) -> dict:
+    """Reopen a paused vendor card (amazon or doordash). Only when the owner asks."""
+    return tools().unfreeze_card(merchant)
 
 
 @mcp.tool()

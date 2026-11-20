@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from pattie.location import Locator  # noqa: E402
 from pattie.policy import Ledger, Policy  # noqa: E402
+from pattie.privacy_cards import PrivacyCards  # noqa: E402
 from pattie.store import Store  # noqa: E402
 from pattie.tools import PattieTools  # noqa: E402
 
@@ -71,7 +72,27 @@ def test_policy_daily_and_monthly_limits():
     for d in range(1, 6):                                                # 5 x $75 earlier this month
         month.record("amazon", 75, [], "placed", NOON.replace(day=d))
     v = POLICY.check(30, "amazon", ["x"], month, NOON, owner_approved=True)
-    assert v["result"] == "block" and v["rule"] == "monthly_limit", v    # 400 - 375 = 25 left
+    assert v["result"] == "block" and v["rule"] == "monthly_limit", v    # Amazon card: $300 a month
+
+
+def test_policy_is_per_vendor():
+    led = Ledger(tmpdb())
+    # DoorDash has its own, lower per-purchase limit
+    v = POLICY.check(45, "doordash", ["Pad thai for 2"], led, NOON, owner_approved=True)
+    assert v["result"] == "block" and v["rule"] == "per_purchase_limit", v
+    assert POLICY.check(45, "amazon", ["Travel adapter"], led, NOON, owner_approved=True)["result"] == "allow"
+    # Spending on one card doesn't use up the other card's daily limit
+    led.record("amazon", 70, [], "placed", NOON - timedelta(hours=2))
+    led.record("amazon", 70, [], "placed", NOON - timedelta(hours=1))
+    assert POLICY.check(30, "doordash", ["Dinner"], led, NOON, owner_approved=True)["result"] == "allow"
+    # ...but the overall monthly limit ($400) covers both cards
+    for d in range(1, 6):
+        led.record("doordash", 35, [], "placed", NOON.replace(day=d))   # $175 + $140 = $315
+    v = POLICY.check(30, "amazon", ["x"], led, NOON - timedelta(hours=13), owner_approved=True)
+    assert v["budget"]["overall_left_this_month"] == 85, v
+    led.record("amazon", 60, [], "placed", NOON.replace(day=6))           # $375 overall
+    v = POLICY.check(30, "amazon", ["x"], led, NOON.replace(day=21), owner_approved=True)
+    assert v["result"] == "block" and v["rule"] == "monthly_limit", v     # only $25 left overall
 
 
 def test_policy_ask_allow_wait():
@@ -121,11 +142,16 @@ def test_find_offers_and_checkout_fallback():
     assert offer["mode"] == "one" and offer["picks"][0]["asin"] == "TESTPB0001", offer
     pick = offer["picks"][0]
     out = t.checkout([pick["asin"]], pick["price"], [pick["title"]], trace_id="t-1")
-    assert out["status"] == "cart_link" and "ASIN.1=TESTPB0001" in out["cart_link"]
-    assert out["policy"]["result"] == "allow"
+    assert out["status"] == "fallback" and "ASIN.1=TESTPB0001" in out["cart_link"]
+    assert out["policy"]["result"] == "allow" and out["card"] == "Privacy - Pattie Amazon"
     status = t.card_status()
-    assert status["recent_purchases"][0]["status"] == "cart_link"
-    assert status["spent_today"] == 0           # nothing was charged
+    assert set(status) == {"amazon", "doordash"}
+    assert status["amazon"]["recent_purchases"][0]["status"] == "cart_link"
+    assert status["amazon"]["spent_today"] == 0           # nothing was charged
+    assert "not connected" in status["amazon"]["privacy"]
+    food = t.checkout(["thai-place"], 32.0, ["Pad thai for 2"], merchant="doordash")
+    assert food["status"] == "fallback" and food["cart_link"] is None and "DoorDash app" in food["message"]
+    assert "Privacy" in t.freeze_card("amazon")["error"]   # no API key in tests
     blocked = t.checkout(["TESTXX0001"], 120.0, ["Big thing"])
     assert blocked["status"] == "blocked" and blocked["policy"]["rule"] == "per_purchase_limit"
 
@@ -141,6 +167,41 @@ def test_set_location_and_shopping_time():
     assert start.tzinfo is not None and (start.hour >= 7 or start.hour == 0), later  # never 1-7 AM
 
 
+class FakePrivacy:
+    """Stands in for api.privacy.com: one Amazon card with a $300 monthly limit."""
+    def __init__(self):
+        self.state, self.calls = "OPEN", []
+
+    def __call__(self, method, url, api_key, body=None):
+        self.calls.append((method, url, body))
+        assert api_key == "test-key"
+        if method == "PATCH":
+            self.state = body["state"]
+            return {}
+        if "/transactions" in url:
+            return {"data": [{"amount": 2999, "status": "SETTLED"}, {"amount": 1250, "status": "PENDING"},
+                             {"amount": 5000, "status": "DECLINED"}]}
+        return {"token": "card-amz", "memo": "Pattie Amazon", "state": self.state,
+                "type": "MERCHANT_LOCKED", "last_four": "4242", "spend_limit": 30000,
+                "spend_limit_duration": "MONTHLY", "pan": "4111111111114242", "cvv": "123"}
+
+
+def test_privacy_cards():
+    fake = FakePrivacy()
+    cards = PrivacyCards("test-key", {"amazon": "card-amz"}, http=fake)
+    st = cards.status("amazon")
+    assert st["limit"] == 300 and st["spent_this_period"] == 42.49 and st["left_this_period"] == 257.51
+    assert "pan" not in cards.card("amazon") and "cvv" not in cards.card("amazon")   # never exposed
+    assert cards.pause("amazon")["state"] == "PAUSED" and cards.resume("amazon")["state"] == "OPEN"
+    assert fake.calls[-2][0] == "PATCH" and fake.calls[-2][2] == {"state": "OPEN"}
+    t = make_tools()
+    t.cards = cards
+    assert t.freeze_card("amazon")["state"] == "PAUSED"
+    assert t.card_status("amazon")["amazon"]["privacy"]["state"] == "PAUSED"
+    assert "doordash" in t.card_status("doordash")["doordash"]["privacy"]  # no token configured
+    assert "error" in t.freeze_card("ebay")
+
+
 def test_mcp_server_lists_tools():
     try:
         import asyncio
@@ -150,7 +211,8 @@ def test_mcp_server_lists_tools():
         return
     names = {tool.name for tool in asyncio.run(mcp_server.mcp.list_tools())}
     expected = {"find_offers", "search_products", "build_cart_link", "check_policy", "checkout",
-                "card_status", "where_am_i", "set_location", "next_shopping_time", "remember", "recall"}
+                "card_status", "freeze_card", "unfreeze_card", "where_am_i", "set_location",
+                "next_shopping_time", "remember", "recall"}
     assert expected <= names, names
 
 

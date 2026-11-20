@@ -1,4 +1,4 @@
-"""Spending policy and purchase ledger (ARCHITECTURE.md, "Purchases: virtual card and spending policy").
+"""Spending policy and purchase ledger (ARCHITECTURE.md, "Purchases: Privacy.com cards and spending policy").
 
     policy = Policy.load()                      # config/policy.json
     ledger = Ledger("pattie.sqlite3")
@@ -6,14 +6,16 @@
                            ledger=ledger, now=datetime.now(tz), owner_approved=True)
     verdict["result"]  -> "allow" | "ask" | "wait" | "block"
 
-- block: not an allowed merchant, a blocked kind of product (gift cards, crypto,
-  subscriptions), over the per-purchase limit, or over what's left of the daily or monthly
-  limit. Pattie sends a cart link instead.
+One Privacy.com card per vendor (Amazon, DoorDash), so every limit except the overall monthly
+one is per vendor:
+- block: not a vendor with its own card, a blocked kind of product (gift cards, crypto,
+  subscriptions), over the vendor's per-purchase limit, or over what's left of the vendor's
+  daily or monthly limit, or of the overall monthly limit. Pattie sends a cart link instead.
 - wait: quiet hours and not urgent. `retry_at` says when to try again.
 - ask: within limits, but needs the owner's yes (always, while auto_approve_threshold is 0).
 - allow: within limits and either the owner said yes or it's at or under the threshold.
 
-The card issuer enforces its own hard limits on top of this. This module never sees card details.
+Privacy.com enforces each card's own hard limit on top of this. This module never sees card details.
 """
 
 from __future__ import annotations
@@ -66,18 +68,20 @@ class Ledger:
                         (status, order_id, purchase_id))
         self.db.commit()
 
-    def spent_since(self, since: datetime) -> float:
+    def spent_since(self, since: datetime, merchant: Optional[str] = None) -> float:
         rows = self.db.execute(
-            f"SELECT total, created_at FROM purchase WHERE status IN "
+            f"SELECT merchant, total, created_at FROM purchase WHERE status IN "
             f"({','.join('?' * len(COUNTS_TOWARD_LIMITS))})", COUNTS_TOWARD_LIMITS,
         ).fetchall()
         return round(sum(r["total"] for r in rows
-                         if datetime.fromisoformat(r["created_at"]) >= since), 2)
+                         if datetime.fromisoformat(r["created_at"]) >= since
+                         and (merchant is None or r["merchant"] == merchant.lower())), 2)
 
-    def recent(self, limit: int = 10) -> list:
+    def recent(self, limit: int = 10, merchant: Optional[str] = None) -> list:
         rows = self.db.execute(
             "SELECT id, merchant, total, items, status, order_id, created_at FROM purchase "
-            "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            "WHERE ? IS NULL OR merchant = ? ORDER BY id DESC LIMIT ?",
+            (merchant, merchant.lower() if merchant else None, limit)).fetchall()
         return [{**dict(r), "items": json.loads(r["items"])} for r in rows]
 
 
@@ -96,6 +100,13 @@ class Policy:
 
     def __getitem__(self, key):
         return self.rules[key]
+
+    @property
+    def merchants(self) -> list:
+        return list(self.rules["merchants"])
+
+    def merchant(self, name: str) -> Optional[dict]:
+        return self.rules["merchants"].get(name.lower())
 
     # --- helpers -------------------------------------------------------------
 
@@ -119,16 +130,24 @@ class Policy:
                     return kw
         return None
 
-    def budget(self, ledger: Ledger, now: datetime) -> dict:
+    def budget(self, ledger: Ledger, now: datetime, merchant: str) -> dict:
+        """What one vendor's card has spent and has left, by Pattie's ledger."""
+        m = self.merchant(merchant)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         month_start = day_start.replace(day=1)
-        spent_day, spent_month = ledger.spent_since(day_start), ledger.spent_since(month_start)
+        spent_day = ledger.spent_since(day_start, merchant)
+        spent_month = ledger.spent_since(month_start, merchant)
+        overall_left = self.rules["overall_monthly_limit"] - ledger.spent_since(month_start)
         return {
+            "merchant": merchant.lower(),
+            "card": m["card"],
             "spent_today": spent_day,
             "spent_this_month": spent_month,
-            "left_today": round(max(self.rules["daily_limit"] - spent_day, 0), 2),
-            "left_this_month": round(max(self.rules["monthly_limit"] - spent_month, 0), 2),
-            "per_purchase_limit": self.rules["per_purchase_limit"],
+            "left_today": round(max(m["daily_limit"] - spent_day, 0), 2),
+            "left_this_month": round(max(min(m["monthly_limit"] - spent_month, overall_left), 0), 2),
+            "per_purchase_limit": m["per_purchase_limit"],
+            "monthly_limit": m["monthly_limit"],
+            "overall_left_this_month": round(max(overall_left, 0), 2),
         }
 
     # --- the check -----------------------------------------------------------
@@ -136,26 +155,30 @@ class Policy:
     def check(self, total: float, merchant: str, titles: list, ledger: Ledger, now: datetime,
               owner_approved: bool = False, urgent: bool = False) -> dict:
         """Decide whether Pattie may buy. `now` must be timezone-aware, in the owner's local time."""
-        budget = self.budget(ledger, now)
-        out = {"total": round(total, 2), "merchant": merchant, "budget": budget}
+        out = {"total": round(total, 2), "merchant": merchant.lower()}
 
         def verdict(result, rule, reason, **extra):
             return {**out, "result": result, "rule": rule, "reason": reason, **extra}
 
-        if merchant.lower() not in [m.lower() for m in self.rules["allowed_merchants"]]:
-            return verdict("block", "allowed_merchants", f"{merchant} isn't an allowed merchant")
+        m = self.merchant(merchant)
+        if m is None:
+            return verdict("block", "merchants",
+                           f"{merchant} has no Pattie card (cards: {', '.join(self.merchants)})")
+        budget = self.budget(ledger, now, merchant)
+        out["budget"] = budget
         kw = self.blocked_keyword(titles)
         if kw:
             return verdict("block", "blocked_keywords", f"Pattie never buys this kind of product ({kw})")
-        if total > self.rules["per_purchase_limit"]:
+        if total > m["per_purchase_limit"]:
             return verdict("block", "per_purchase_limit",
-                           f"${total:.2f} is over the ${self.rules['per_purchase_limit']} per-purchase limit")
+                           f"${total:.2f} is over the ${m['per_purchase_limit']} per-purchase limit for {merchant}")
         if total > budget["left_today"]:
             return verdict("block", "daily_limit",
-                           f"${total:.2f} is more than the ${budget['left_today']:.2f} left today")
+                           f"${total:.2f} is more than the ${budget['left_today']:.2f} left today on the {merchant} card")
         if total > budget["left_this_month"]:
             return verdict("block", "monthly_limit",
-                           f"${total:.2f} is more than the ${budget['left_this_month']:.2f} left this month")
+                           f"${total:.2f} is more than the ${budget['left_this_month']:.2f} left this month "
+                           f"on the {merchant} card")
         if self.in_quiet_hours(now) and not urgent:
             return verdict("wait", "quiet_hours", "it's quiet hours",
                            retry_at=self.quiet_hours_end(now).isoformat())

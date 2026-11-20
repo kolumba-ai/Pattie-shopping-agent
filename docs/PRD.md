@@ -2,11 +2,11 @@
 
 Nov 20, 2026 · Emmalou Schmucker (product) · Living version: [Claude doc](https://claude.ai/artifact/5UatkYsXd49m5kqRdFWn5L)
 
-> **Updated Nov 20 (Mauricio):** Pattie can now log in to the user's Amazon account and complete purchases with a dedicated virtual card, after the user's yes. Cart links remain the fallback. The living Claude doc doesn't have this change yet. Technical details are in [ARCHITECTURE.md](ARCHITECTURE.md).
+> **Updated Nov 20 (Mauricio):** Pattie can now log in to the user's Amazon account and complete purchases with Privacy.com virtual cards (one for Amazon, one for DoorDash), after the user's yes. Cart links remain the fallback. The living Claude doc doesn't have this change yet. Technical details are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Summary
 
-Pattie is a shopping agent that lives in Telegram and reads your Google Calendar. It spots events that need stuff (trips, parties, hackathons), proposes what you might need, finds it on Amazon, gets your yes, and then buys it for you with its own virtual card, within spending limits you set. It also handles food: when your day is packed, it asks ahead whether to order breakfast or dinner from DoorDash or Uber Eats.
+Pattie is a shopping agent that lives in Telegram and reads your Google Calendar. It spots events that need stuff (trips, parties, hackathons), proposes what you might need, finds it on Amazon, gets your yes, and then buys it for you with its own Privacy.com card for that store (one for Amazon, one for DoorDash), within spending limits you set. It also handles food: when your day is packed, it asks ahead whether to order breakfast or dinner from DoorDash or Uber Eats.
 
 Pattie serves two kinds of customers: individuals, and small businesses that want their routine purchasing handled the same way, from the company calendar.
 
@@ -23,7 +23,7 @@ The hackathon goal is one reliable end-to-end demo: a calendar event becomes a T
 - Turn a calendar event into a relevant, explained product shortlist without the user typing a search.
 - Keep the user in control: every purchase needs an explicit yes.
 - Buy for the user after that yes, so they never have to open Amazon and check out.
-- Spend safely: a dedicated virtual card with hard limits, plus a spending policy Pattie checks before every purchase.
+- Spend safely: a Privacy.com card per vendor, merchant-locked with a hard monthly limit, plus a per-vendor spending policy Pattie checks before every purchase.
 - Save money on non-urgent items through basket bundling and price watching.
 - Show food nudges at the right moment, based on schedule gaps.
 
@@ -33,7 +33,7 @@ The hackathon goal is one reliable end-to-end demo: a calendar event becomes a T
 - Getting around platform bot detection, or clicking or buying ads automatically.
 - Supporting every event type; we cover four in the demo.
 - Storing the user's Amazon password. The user signs in once; Pattie keeps only the resulting session, in 1Password.
-- Paying with anything other than Pattie's virtual card.
+- Paying with anything other than Pattie's Privacy card for that vendor.
 - Automated checkout on DoorDash or Uber Eats. Food stays a deep link for the demo.
 
 | Metric | Target for demo | Why it matters |
@@ -72,7 +72,7 @@ Pattie has two user groups. The hackathon demo shows the individual; the small b
 | 8 | Pattie to watch prices on waiting items and buy at a good price | I get a better deal | Should |
 | 9 | To see why each item was picked, and which results are sponsored | I can trust the recommendation | Must |
 | 10 | To set budget, brands, dietary preferences and quiet hours | Pattie fits me and doesn't nag | Should |
-| 11 | Hard spending limits on Pattie's card, and a way to freeze it from chat | A mistake can't cost me much | Must |
+| 11 | Hard spending limits on each of Pattie's cards, and a way to freeze one from chat | A mistake can't cost me much | Must |
 | 12 | A confirmation after every order with the total, arrival date and budget left | I always know what was bought | Must |
 
 ### Small businesses
@@ -92,7 +92,7 @@ For the hackathon, the small-business persona is part of the pitch, not the live
 
 ## Core flows
 
-Every flow ends with an explicit user yes, a policy check, and an order Pattie places in the user's account with its virtual card. Nothing is bought until the user says yes.
+Every flow ends with an explicit user yes, a policy check, and an order Pattie places in the user's account with its Privacy card for that vendor. Nothing is bought until the user says yes.
 
 ```mermaid
 flowchart LR
@@ -104,7 +104,7 @@ flowchart LR
     F -- within 7 days --> G[Policy check<br/>limits, merchant, category]
     F -- 8 to 30 days --> H[Waiting basket<br/>price watch, $35 rule]
     H -- trigger fires, user says yes --> G
-    G -- allowed --> I[Pattie checks out<br/>virtual card, user's account]
+    G -- allowed --> I[Pattie checks out<br/>vendor's Privacy card]
     G -- blocked or checkout fails --> J[Cart link<br/>user checks out]
     I --> K[Order confirmation<br/>total, arrival, budget left]
 ```
@@ -174,7 +174,7 @@ Pattie uses stored preferences (cuisine, dietary restrictions, budget, favorite 
 
 ## Purchase and platform access
 
-Pattie logs in to the user's Amazon account and checks out for them, after the user's yes, paying with a dedicated virtual card. If a purchase is blocked by policy or checkout fails, Pattie falls back to a cart link the user completes themselves.
+Pattie logs in to the user's Amazon account and checks out for them, after the user's yes, paying with its Privacy.com card for that vendor. If a purchase is blocked by policy or checkout fails, Pattie falls back to a cart link the user completes themselves.
 
 **Logging in**
 
@@ -182,30 +182,32 @@ Pattie logs in to the user's Amazon account and checks out for them, after the u
 - Pattie stores only the resulting session cookies, in 1Password. It never sees or stores the password.
 - When Amazon asks for a password or a one-time code again, Pattie asks the user in chat, and the user completes the step.
 
-**Paying: the virtual card**
+**Paying: Privacy.com cards, one per vendor**
 
-- A virtual card issued only for Pattie, separate from the user's other cards, and saved as a payment method in the user's Amazon account.
-- **Hard limits at the card issuer:** a per-purchase cap, a monthly cap, and a merchant lock where the issuer supports it. A charge over a limit is declined, whatever happens on Pattie's side.
-- The card details live only in 1Password and at the issuer. They never pass through the model, the chat or the logs.
-- The user can ask "freeze the card" or "how much have you spent this month?" in chat.
+- Two [Privacy.com](https://privacy.com) virtual cards, only for Pattie: **Pattie Amazon** and **Pattie DoorDash**. Each is saved as a payment method in the user's account at that vendor.
+- **Merchant-locked:** each card works only at its vendor. A charge anywhere else is declined.
+- **Hard monthly limit at Privacy:** $300 for Amazon and $150 for DoorDash (example values). A charge over the limit is declined, whatever happens on Pattie's side.
+- The card details live only at Privacy, at the vendor, and in 1Password. They never pass through the model, the chat or the logs.
+- The user can ask "freeze the Amazon card" or "how much is left on the DoorDash card?" in chat.
 
 **Spending policy**
 
 Before every checkout, Pattie checks the purchase against a spending policy the user controls. Example values:
 
-| Rule | Example | Effect |
-| --- | --- | --- |
-| Per-purchase limit | $75 | Above it, Pattie sends a cart link instead |
-| Daily / monthly limit | $150 / $400 | Counts every Pattie purchase |
-| Auto-approve threshold | $0 | Everything still needs a yes. The user can raise it later ("buy anything under $20 without asking") |
-| Allowed merchants | Amazon (sold by Amazon.com) | Anything else is blocked |
-| Never buy | Gift cards, digital currency, subscriptions | Blocked |
+| Rule | Amazon | DoorDash | Effect |
+| --- | --- | --- | --- |
+| Per-purchase limit | $75 | $40 | Above it, Pattie sends a link instead |
+| Daily / monthly limit | $150 / $300 | $80 / $150 | Counts that card's purchases |
+| Overall monthly limit | $400 across both | | Caps total spending |
+| Auto-approve threshold | $0 (both) | | Everything still needs a yes. The user can raise it later ("buy anything under $20 without asking") |
+| Vendors | Only vendors with a Pattie card | | Anything else is blocked |
+| Never buy | Gift cards, digital currency, subscriptions, memberships | | Blocked |
 
 **Checkout**
 
 1. The user says yes.
 2. Pattie checks the policy and the card's remaining limits.
-3. Pattie adds the items to the cart, picks the virtual card and the right delivery address, confirms the total matches what the user approved, and places the order.
+3. Pattie adds the items to the cart, picks that vendor's Pattie card and the right delivery address, confirms the total matches what the user approved, and places the order.
 4. Pattie sends the order confirmation: items, total, arrival date and budget left this month.
 
 **Amazon**
@@ -228,7 +230,7 @@ Before every checkout, Pattie checks the purchase against a spending policy the 
 **What we will not build**
 
 - Buying anything without the user's yes (while the auto-approve threshold is $0) or outside the spending policy.
-- Storing the user's Amazon password, or paying with any card other than Pattie's virtual card.
+- Storing the user's Amazon password, or paying with any card other than Pattie's Privacy card for that vendor.
 - Anything that disguises the agent as a human to get past bot detection: faked browsing speed, spoofed locations, rotating residential IPs.
 - Automated ad clicks, or a quota of ad purchases. That is click fraud, and it contradicts the anti-manipulation principle Pattie is built on.
 
@@ -242,7 +244,7 @@ Pattie runs as an OpenBot agent on a Hostinger VPS and talks to the owner in Tel
 | Agent runtime | OpenBot server on a Hostinger VPS | Runs Pattie, its routines and the Telegram connector; admin access over Tailscale |
 | Calendar | Google Calendar API, read-only | Push notifications (`events.watch`) plus sync tokens, so only changed events are fetched; a fallback poll catches missed pushes. The demo account uses a service account with the calendar shared read-only (`pattie/sources.py`) |
 | Agent | Open-weight model preferred, Claude Sonnet as fallback, with tool calls (event classification currently runs on Claude Sonnet 5.5) | Tools: classify_event, suggest_items, search_products, rank_products, check_policy, checkout, card_status, build_cart_link, add_to_basket, suggest_food |
-| Payments | Virtual card from a card issuer with an API | Hard limits at the issuer; spending policy in Pattie; freeze from chat |
+| Payments | Privacy.com, one merchant-locked card per vendor (Amazon, DoorDash) | Monthly hard limit per card at Privacy; per-vendor spending policy in Pattie; freeze a card from chat |
 | Secrets | 1Password (service accounts) | Holds API keys, the Amazon session and the card details, in vaults made for Pattie |
 | Product search | PA-API / Creators API, or a curated catalog fallback | Returns ASIN, title, price, rating, delivery estimate, sponsored flag |
 | Price watch | Keepa API + daily cron job | Checks basket prices and fires the order triggers |
@@ -287,7 +289,7 @@ Partner call-outs are in brackets; several judges come from these partners.
 
 1. **Setup (15 s).** Show Anna Susan's calendar: "Hackathon SF" tomorrow 8am–9pm, "Flight to NY" in 6 days, "Lisa's birthday" in 3 weeks, "AI Meetup" next week, plus the dentist and the 1:1. "Pattie watches this calendar. It already decided the dentist and the 1:1 need nothing, so it stayed quiet." *[Google Calendar push, Airbyte for history]*
 2. **Proactive message (30 s).** Pattie messages in Telegram, unprompted: "Hackathon SF tomorrow, 8am to 9pm. Your power bank broke last month. Want an Anker one, plus cold brew and some vegetarian snacks? It all arrives tonight." Point out the memory: cold brew instead of energy drinks, because she turned those down at her last hackathon. Reply "yes, power bank and cold brew". *[Cognee]*
-3. **One best option (30 s).** Her accessory budget ($40) and brand (Anker) are known, so Pattie sends one pick with a photo, price, rating, arrival time and reason. Reply "yes". Pattie checks the spending policy, places the order on its virtual card and replies with the confirmation, arrival time and budget left. Show the order in Amazon's order history. *[Statsig `checkout_mode` flag]*
+3. **One best option (30 s).** Her accessory budget ($40) and brand (Anker) are known, so Pattie sends one pick with a photo, price, rating, arrival time and reason. Reply "yes". Pattie checks the spending policy, places the order on the Pattie Amazon card and replies with the confirmation, arrival time and budget left. Show the order in Amazon's order history. *[Statsig `checkout_mode` flag]*
 4. **Memory changes the next proposal, and three options (40 s).** Pattie moves on to the flight: "Flight to NY on Thursday. You already have a neck pillow, packing cubes and now a power bank, so just unscented travel-size toiletries?" Reply "yes". She has no favorite toiletry brand, so the choice isn't obvious: Pattie sends three labeled options (cheapest, best rated, arrives soonest), one marked "Sponsored", and says why each ranks where it does. *[Cognee; Superlinked if used for ranking]*
 5. **Long-term basket and limits (30 s).** For Lisa's birthday in 3 weeks, Pattie suggests a gardening gift or a natural-wine accessory, "not another cookbook like last year." Pick the $22 wine aerator: it goes into the basket, "$22 of $35. I'll watch the price and order by Dec 6 at the latest." Trigger a simulated price drop: "Price dropped 18%. Order now?" Then ask for the $89 gardening set: it's over the $75 per-purchase limit, so Pattie sends a cart link instead of buying. *[Cognee]*
 6. **Food nudge (25 s).** Fast-forward the clock to 8pm: "Hackathon starts at 8 tomorrow. Your usual oat milk latte and everything bagel, delivered to the venue at 8:15?" Reply "yes" and get the DoorDash link with the order written out.
@@ -298,7 +300,7 @@ Partner call-outs are in brackets; several judges come from these partners.
 - Calendar: the six events from `demo/pattie-demo-calendar.ics`, regenerated for the demo day (`python demo/gen_seed_calendar.py --demo-date YYYY-MM-DD`) and re-imported.
 - Memory: `python -m pattie.memory reset`, then `seed demo/anna_susan_profile.md`, so earlier rehearsals don't leak into the demo.
 - Decisions: clear processed events, so Pattie proposes again on stage.
-- Virtual card funded, Amazon session valid, Telegram open on the demo phone, Amplitude dashboard open on the laptop.
+- Both Privacy cards open and funded, Amazon session valid, Telegram open on the demo phone, Amplitude dashboard open on the laptop.
 
 **If something breaks on stage**
 
@@ -307,7 +309,7 @@ Partner call-outs are in brackets; several judges come from these partners.
 - The clock jump for the food nudge: use the watcher's `--now` option or start the routine directly.
 - Keep a screen recording of a full dry run as a last resort.
 
-**In scope:** flows 1–6 for the four demo events, one test user, a curated catalog if the API keys don't arrive, one real low-cost order on the virtual card.
+**In scope:** flows 1–6 for the four demo events, one test user, a curated catalog if the API keys don't arrive, one real low-cost order on the Pattie Amazon card.
 **Out of scope:** onboarding UI, multiple users, automated food checkout, Uber Eats integration beyond a link.
 
 **Owners**
@@ -316,7 +318,7 @@ Partner call-outs are in brackets; several judges come from these partners.
 - [x] Seed calendar and demo persona memory — Emmalou
 - [ ] Backend, Telegram, Calendar, agent tools — Mauricio
 - [ ] Product catalog / PA-API keys and Keepa key — owner to be decided
-- [ ] Virtual card issued with limits, Amazon sign-in, 1Password vaults and service accounts set up — owner to be decided
+- [ ] Privacy cards for Amazon and DoorDash created with monthly limits and saved at each vendor, Amazon sign-in, 1Password vaults and service accounts set up — owner to be decided
 - [ ] Dry run of the full demo twice before judging — both
 
 ## Risks and open questions
@@ -331,7 +333,7 @@ Partner call-outs are in brackets; several judges come from these partners.
 | Calendar privacy concerns | Users won't connect it | Read-only scope, only titles/times/locations used, clear opt-in |
 | Amazon flags or suspends the account for agent activity | User loses their Amazon account | One switch turns agent checkout off and falls back to cart links; see Context.md on Amazon's terms |
 | Wrong item or amount bought | Money lost | Yes required, total checked against the approved amount, hard card limits, Amazon returns |
-| Card details leak | Fraudulent charges | Virtual card with low limits, details only in 1Password, freeze from chat |
+| Card details leak | Fraudulent charges | Merchant-locked Privacy cards (useless at other merchants) with low monthly limits, freeze from chat |
 | Login challenge or one-time code during checkout | Order stalls | Pattie asks the user in chat; falls back to a cart link |
 | Checkout breaks live on stage | Demo fails | Pre-test the exact item; cart link fallback is automatic |
 
@@ -342,6 +344,6 @@ Partner call-outs are in brackets; several judges come from these partners.
 - [ ] Price-drop trigger: 15% the right number, or relative to Keepa's 90-day low?
 - [ ] Do we show a web view for the long-term basket, or keep everything in Telegram?
 - [ ] Confirm API access and credits with Cognee, Airbyte, Persona and Amplitude + Statsig at kickoff.
-- [ ] Which card issuer can issue a limited virtual card today (Privacy.com, Lithic, Stripe Issuing)?
+- [ ] Does the Privacy.com plan include API access, and does its funding source cover both cards' monthly limits?
 - [ ] What are the real limits, and should the auto-approve threshold ever go above $0?
 - [ ] How does the Persona pitch ("a verified, transparent agent") fit with Pattie logging in to Amazon?

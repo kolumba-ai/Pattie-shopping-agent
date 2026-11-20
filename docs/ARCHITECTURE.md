@@ -25,7 +25,7 @@ Open questions, including the points where the PRD and Context.md disagree, are 
 | Tracing and experiments | **Amplitude** + **Statsig** | Every agent step is logged; flags control risky or tunable behavior |
 | Network security | **Tailscale** | The VPS has no open inbound ports. Admin access goes over a private Tailscale network, and the one public endpoint (the calendar webhook) goes through Tailscale Funnel |
 | Secrets | **1Password** | Holds every access key, the Amazon session and the virtual card details, in vaults made for Pattie. Services read them at run time through 1Password service accounts; nothing sensitive sits in plain files or in the model's context |
-| Payments | **Virtual credit card** with spend limits | The card Pattie pays with. Limits are enforced by the card issuer and by Pattie's spending policy |
+| Payments | **Privacy.com** virtual cards, one per vendor (Amazon, DoorDash) | Merchant-locked cards with monthly limits at Privacy, plus Pattie's per-vendor spending policy |
 | Model | Open-weight model preferred; **Claude Sonnet** as fallback | Classifies events, ranks products, writes messages |
 
 ## System diagram
@@ -70,7 +70,7 @@ flowchart LR
         SS[Statsig]
         LLM[Open-weight model<br/>Sonnet fallback]
         VLT[1Password<br/>Pattie vaults]
-        ISS[Card issuer<br/>virtual card, limits]
+        ISS[Privacy.com<br/>Amazon card, DoorDash card]
     end
 
     AMZ[Amazon.com]
@@ -210,9 +210,10 @@ Each is started through OpenBot's **local automation API**:
 | `suggest_items` | Lists up to five item types with reasons | Model + Cognee (preferences) |
 | `search_products` | Searches Amazon; returns ASIN, title, price, rating, reviews, photo, sponsored flag | Tilion (`amazon_search.py`) |
 | `rank_products` | Scores fit, rating, price and delivery date; applies the one-or-three rule and the sponsored policy | Model + rules + Statsig flags |
-| `check_policy` | Checks a proposed purchase against the spending policy and the card's remaining limits; returns allow, ask or block | Policy file + card issuer API |
-| `checkout` | Buys the approved items on Amazon with the virtual card. The card details go from 1Password straight into the browser and never pass through the model | 1Password + Tilion (logged-in session) |
-| `card_status` | Reports spend so far, remaining limits and recent transactions | Card issuer API |
+| `check_policy` | Checks a proposed purchase against that vendor's limits and the overall monthly limit; returns allow, ask, wait or block | `config/policy.json` + ledger |
+| `checkout` | Buys the approved items at Amazon or DoorDash with that vendor's Privacy card. The card details go from 1Password straight into the browser and never pass through the model | 1Password + Tilion (logged-in session) |
+| `card_status` | Per vendor card: spend so far, what's left, recent purchases, card state at Privacy | Ledger + Privacy API |
+| `freeze_card` / `unfreeze_card` | Pauses or reopens one vendor's card | Privacy API |
 | `build_cart_link` | Builds the Amazon cart handoff URL, used when checkout isn't possible | Pure function |
 | `add_to_basket` / `check_basket` | Manages the long-term basket and price watch; fires the $35, price-drop and safe-order-date triggers | Postgres + Cognee + Tilion |
 | `suggest_food` | Finds meal gaps and drafts an order with a deep link | Calendar + Cognee + location |
@@ -316,7 +317,7 @@ Every agent step is traceable (tenet 6). Each trigger gets a `trace_id`, and eve
 | `item_chosen` | ASIN, price, rating, sponsored, rank, rule that decided it |
 | `policy_checked` | result (allow / ask / block), rule that decided, total, limits remaining |
 | `checkout_attempted` / `checkout_completed` / `checkout_failed` | total, items, failure reason, fell back to cart link |
-| `card_charged` | amount, merchant, issuer authorization result (from the issuer webhook) |
+| `card_charged` | amount, vendor card, Privacy authorization result (from Privacy's transaction webhook) |
 | `secret_read` | secret name (never the value), service; card reads only |
 | `cart_link_sent` / `cart_link_opened` | item count, total, qualifies for $35 |
 | `basket_triggered` | trigger ($35 / price drop / safe date), savings |
@@ -379,7 +380,7 @@ sequenceDiagram
     AG->>TG: photo(s) with price, rating, arrival, reason, "Sponsored" label
     TG->>AG: "yes"
     AG->>AG: check_policy (limits, merchant, category)
-    AG->>TL: checkout in logged-in session, virtual card from 1Password
+    AG->>TL: checkout in logged-in session, vendor's saved Privacy card
     AG->>TG: order confirmed, arrival date, budget left
     AG->>CG: remember decision
     AG->>AM: item_chosen, checkout_completed
@@ -407,49 +408,58 @@ About once a day, at a random time inside the shopping peaks, the scheduler star
 
 Each evening the scheduler reads the next day's calendar for the PRD's three triggers and schedules the nudges. The delivery place comes from `where_am_i`. The order stays a deep link to DoorDash or Uber Eats with the order written out, because neither has a consumer ordering API.
 
-## Purchases: virtual card and spending policy
+## Purchases: Privacy.com cards and spending policy
 
-Pattie pays with a **virtual credit card** issued only for Pattie, with spend limits. Two layers enforce the limits, so a bug or a bad model decision in one is caught by the other:
+Pattie pays with **[Privacy.com](https://privacy.com) virtual cards, one per vendor**: one card for Amazon and one for DoorDash. Each card is merchant-locked, so it can't be used anywhere else. Two layers enforce the limits, so a bug or a bad model decision in one is caught by the other:
 
 | Layer | Enforced by | Can't be bypassed by |
 |---|---|---|
-| **Card limits** | The card issuer, at authorization | Anything on the VPS. A charge over the limit is declined by the network |
-| **Spending policy** | `check_policy` in the tools server, before every checkout | The model. The tool returns allow, ask or block, and `checkout` refuses to run without a fresh allow or ask-then-yes |
+| **Card limits** | Privacy.com, at authorization: each card's merchant lock and monthly spend limit | Anything on the VPS. A charge at another merchant, or over the limit, is declined |
+| **Spending policy** | `check_policy` in the tools server, before every checkout, with limits per vendor | The model. The tool returns allow, ask, wait or block, and `checkout` refuses to run without a fresh allow or ask-then-yes |
 
-### The virtual card
+### The cards
 
-- **One card for Pattie, separate from the owner's other cards,** so it can be frozen or replaced without affecting anything else.
-- **Limits set at the issuer:** a per-transaction cap, a monthly cap, and where the issuer supports it, a merchant lock (Amazon, plus a separate card for food delivery if needed).
-- **Issuer API:** `card_status` reads spend and transactions, and the issuer's webhooks report each authorization. Every charge is logged to Amplitude with the `trace_id` of the purchase that caused it.
-- **Freeze from chat:** "freeze the card" calls the issuer API at once.
-- **Where the details live:** the card number, expiry and CVV are stored only in 1Password and at the issuer. They're also saved as a payment method in the owner's Amazon account, so most checkouts select the saved card and never handle the number.
+| Card | Privacy.com setup | Saved in | Used for |
+|---|---|---|---|
+| **Pattie Amazon** | `MERCHANT_LOCKED`, spend limit $300 `MONTHLY` | The owner's Amazon account, as a payment method | Amazon orders |
+| **Pattie DoorDash** | `MERCHANT_LOCKED`, spend limit $150 `MONTHLY` | The owner's DoorDash account, as a payment method | Food orders |
+
+- **Separate from the owner's other cards,** and from each other: one card can be paused or replaced without touching the other.
+- **Merchant lock:** a Privacy merchant-locked card locks to the first merchant that charges it. Make each card's first charge at its own vendor, by saving it there and placing a small first order.
+- **One hard limit per card:** Privacy allows one spend limit per card, for one period. Each card uses a **monthly** limit, the most it can lose in a month. The per-purchase and daily limits live in Pattie's policy.
+- **Privacy API** (`pattie/privacy_cards.py`): `card_status` reads each card's state, limit and spend this period. `freeze_card` and `unfreeze_card` pause and reopen a card. The code never requests card numbers or CVVs, and drops them if the API returns them. Privacy's transaction webhooks can later report each charge, so every charge is logged to Amplitude with the `trace_id` of the purchase that caused it.
+- **Freeze from chat:** "freeze the Amazon card" pauses that card at once. If the owner doesn't say which, Pattie asks.
+- **Where the details live:** the card numbers are saved as payment methods at Amazon and DoorDash, so checkouts select the saved card. A copy of each card, and the Privacy API key, live in 1Password, for when a vendor asks to re-enter the card.
 
 ### The spending policy
 
-The policy is a versioned file in the repo (for example `policy.yaml`), with its thresholds mirrored as Statsig flags for experiments:
+The policy is a versioned file in the repo, [`config/policy.json`](../config/policy.json), with its thresholds mirrored as Statsig flags for experiments. Limits are per vendor, plus one overall monthly cap:
 
-| Rule | Example value | Effect |
-|---|---|---|
-| Per-purchase limit | $75 | Above it: **block**; Pattie sends a cart link instead |
-| Daily limit | $150 | Counts every Pattie purchase today |
-| Monthly limit | $400 | Matches the card's monthly cap, or stays just under it |
-| Auto-approve threshold | $0 | At or below it: **allow** without asking. $0 means always ask |
-| Allowed merchants | Amazon (sold by Amazon.com), DoorDash, Uber Eats | Anything else: **block** |
-| Categories never bought | Gift cards, digital currency, subscriptions | **block** |
-| Quiet hours | From the owner's profile | Purchases wait unless the item is urgent |
-| Sponsored rule | Per the `sponsored_policy` flag | Applied in ranking, before the policy check |
+| Rule | Amazon | DoorDash | Effect |
+|---|---|---|---|
+| Per-purchase limit | $75 | $40 | Above it: **block**. Amazon gets a cart link instead |
+| Daily limit | $150 | $80 | Counts that card's purchases today |
+| Monthly limit | $300 | $150 | Matches the card's Privacy monthly limit |
+| Overall monthly limit | $400 across both | | Neither card can push total spending past it |
+| Auto-approve threshold | $0 (both) | | At or below it: **allow** without asking. $0 means always ask |
+| Vendors | Only vendors with a Pattie card | | Anything else: **block** |
+| Never bought | Gift cards, digital currency, subscriptions, memberships (including DashPass) | | **block** |
+| Quiet hours | 10 PM–7 AM local | | Purchases **wait** unless urgent |
+| Sponsored rule | Per the `sponsored_policy` flag | | Applied in ranking, before the policy check |
 
 **Explicit yes stays the default.** With the auto-approve threshold at $0, every purchase still needs the owner's yes in Telegram, as the PRD requires. The owner can raise the threshold later ("just buy anything under $20").
 
 ### Checkout flow
 
 1. The owner says yes to one or more items.
-2. `check_policy` checks the total against the policy and the card's remaining limits (`card_status`).
-3. **Allow** (or ask, then yes): `checkout` runs in a logged-in Tilion session. It adds the items to the cart, selects the virtual card and the delivery address from `where_am_i`, confirms the total matches what the owner approved (within the policy's tolerance), and places the order.
-4. Pattie sends the order confirmation, arrival date and remaining monthly budget to Telegram.
-5. **Block, or checkout fails** (login challenge, price changed beyond the tolerance, item unavailable): Pattie sends the cart handoff link instead (`https://www.amazon.com/gp/aws/cart/add.html?ASIN.1=…&Quantity.1=1…`), and the owner checks out themselves.
+2. `check_policy` checks the total against that vendor's limits and the overall monthly limit.
+3. **Allow** (or ask, then yes): `checkout` runs in a logged-in Tilion session at that vendor. It adds the items to the cart, selects that vendor's Pattie card and the delivery address from `where_am_i`, confirms the total matches what the owner approved (within the policy's 5% tolerance), and places the order.
+4. Pattie sends the order confirmation, arrival time and what's left on that card this month to Telegram.
+5. **Block, or checkout fails** (login challenge, price changed beyond the tolerance, item unavailable): for Amazon, Pattie sends the cart handoff link (`https://www.amazon.com/gp/aws/cart/add.html?ASIN.1=…&Quantity.1=1…`); for DoorDash, the restaurant link with the order written out. The owner checks out themselves, still paying with Pattie's card for that vendor.
 
-**Food delivery** has no consumer ordering API on DoorDash or Uber Eats. Checking out in their web apps through the browser works the same way, but is less reliable. For the demo, food stays a deep link with the order written out, and the owner pays in the app.
+**Status today:** `checkout` isn't connected to a logged-in session yet, so it always takes step 5's fallback after running the real policy check. Because the Pattie cards are the saved payment methods, even those fallback orders are paid by the card for that vendor, within its limits.
+
+**DoorDash** has no consumer ordering API. Automated checkout in its web app works the same way as Amazon's but is less reliable, so for the demo, food stays a deep link and the owner taps to pay.
 
 ## 1Password (secrets)
 
@@ -457,11 +467,11 @@ Every secret Pattie uses lives in the owner's **1Password** account, in vaults m
 
 | Vault | Item | Used by |
 |---|---|---|
-| **Pattie** | API keys: Tilion, Cognee, Amplitude, Statsig, model providers, card issuer | Tools server |
+| **Pattie** | API keys: Tilion, Cognee, Amplitude, Statsig, model providers, Privacy.com | Tools server |
 | **Pattie** | Google OAuth client and refresh token | Webhook receiver, Airbyte setup |
 | **Pattie** | OpenBot local API token | Webhook receiver, scheduler |
 | **Pattie** | Amazon session cookies | `checkout` (read and write back) |
-| **Pattie Card** | Virtual card (1Password's credit card item: number, expiry, CVV) | `checkout` only, when Amazon asks for re-entry |
+| **Pattie Card** | The two Privacy cards, Amazon and DoorDash (1Password's credit card item: number, expiry, CVV) | `checkout` only, when a vendor asks to re-enter the card |
 
 **How services get secrets:**
 
@@ -521,7 +531,7 @@ The VPS is reachable from the internet only where it must be. [Tailscale](https:
 - **Card data:** card details move from 1Password directly into the browser's payment form during checkout. They never enter the model's context, Postgres, Cognee or logs. Tilion's cloud browser does see the page, so Tilion is part of the trust chain for payments (FAQ 11).
 - **Least privilege:** read-only scope on Google Calendar, Gmail limited to order confirmations, card details readable only by `checkout`.
 - **Private by default:** no inbound ports are open except the Funnel webhook path and the Airbyte exception. OpenBot's local API, the MCP servers, Postgres and Cognee aren't public. The webhook receiver checks Google's channel token on every request, because Funnel makes that path reachable by anyone.
-- **Owner controls in chat:** "what do you know about me", "forget X", "pause Pattie", "stop food suggestions", "freeze the card", "how much have you spent this month?".
+- **Owner controls in chat:** "what do you know about me", "forget X", "pause Pattie", "stop food suggestions", "freeze the Amazon card", "how much is left on the DoorDash card?".
 - **Backups:** Hostinger's weekly VPS backups, plus a nightly Postgres dump.
 
 ## Build order for the hackathon
@@ -530,7 +540,7 @@ The VPS is reachable from the internet only where it must be. [Tailscale](https:
 2. **Proactive message test.** Create the "calendar event" routine and start it from the local API with a fake event. *Done when the routine posts into the Telegram chat.* This is the riskiest OpenBot assumption (FAQ 1), so test it early.
 3. **Search and cart link.** Build the Pattie tools MCP server with `search_products` and `build_cart_link`, reading keys from 1Password. *Done when "find me a power bank" returns a photo, a price and a working cart link.*
 4. **Calendar trigger.** Set up OAuth, the watch channel and the webhook receiver. *Done when a new test event produces a proposal in Telegram.*
-5. **Virtual card and checkout.** Issue the card with its limits, save it in the owner's Amazon account, store the details and Amazon cookies in 1Password, write `policy.yaml`, and build `check_policy`, `checkout` and `card_status`. *Done when a yes in Telegram places a real low-cost order, and an order over the limit is blocked and falls back to a cart link.*
+5. **Privacy cards and checkout.** Create the two merchant-locked Privacy cards with monthly limits, save each at its vendor, put the Privacy API key and card tokens in 1Password, store the details and Amazon cookies in 1Password, set the limits in `config/policy.json`, and connect `check_policy`, `checkout` and `card_status`. *Done when a yes in Telegram places a real low-cost order, and an order over the limit is blocked and falls back to a cart link.*
 6. **Cognee.** Profile, delivery addresses and decisions, used by `suggest_items` and the one-vs-three rule.
 7. **Tracing.** Amplitude events with `trace_id`; Statsig flags, starting with `kill_switch_amazon`, `checkout_mode`, `model_route` and `sponsored_policy`.
 8. **Location and food.** `where_am_i` and the food-nudge scheduling.
@@ -547,7 +557,7 @@ These were open and are now settled. They're listed so readers of older versions
 - **Interface:** Telegram, through OpenBot's built-in connector. TENETS.md is updated; the PRD isn't yet (question 6).
 - **Model:** open-weight first, Claude Sonnet as fallback, routed per step with the `model_route` flag.
 - **Secrets:** all access keys, the Amazon session and the card details live in 1Password (Pattie vaults), read through service accounts. Replaces the earlier self-hosted Vault plan.
-- **Payments:** Pattie logs in and pays with a virtual card with spend limits, governed by the spending policy. Cart links remain the fallback. The PRD reflects this.
+- **Payments:** Pattie logs in and pays with Privacy.com cards, one per vendor (Amazon, DoorDash), governed by the per-vendor spending policy. Cart links remain the fallback. The PRD reflects this.
 
 ### About OpenBot and Telegram
 
@@ -568,8 +578,8 @@ Probably, since nothing is sold. A commercial Pattie would need a commercial Ope
 
 ### About payments and secrets
 
-**6. Which card issuer?**
-It needs per-card spend limits, ideally merchant locks, an API to read transactions and freeze the card, and authorization webhooks. Candidates: Privacy.com for a personal card, or Lithic or Stripe Issuing for a programmable card (these usually need a business account). Visa and Mastercard's agent-payment programs are worth checking for later. *Decide at kickoff, based on what can be issued today.*
+**6. Does the Privacy.com plan include API access, and what are the funding limits?**
+Privacy.com is decided, with one merchant-locked card per vendor. *To check:* that the owner's Privacy plan includes an API key, and that the funding source covers the combined monthly limits ($450 across both cards; Pattie's overall cap is $400).
 
 **7. What are the actual limits?**
 The policy table shows example values ($75 per purchase, $150 per day, $400 per month, auto-approve at $0). *The owner sets the real numbers.*
@@ -578,7 +588,7 @@ The policy table shows example values ($75 per purchase, $150 per day, $400 per 
 The PRD requires an explicit yes for every purchase, so the auto-approve threshold starts at $0. Raising it (for example, "anything under $20") is a product decision for Mauricio and Emmalou.
 
 **9. Does the living PRD match?**
-The PRD in this repo now says Pattie logs in and purchases with the virtual card after the user's yes. The living Claude doc linked at the top of the PRD hasn't been updated yet, so Emmalou should copy the change there, or point the link at the repo version.
+The PRD in this repo now says Pattie logs in and purchases with its Privacy.com card for each vendor after the user's yes. The living Claude doc linked at the top of the PRD hasn't been updated yet, so Emmalou should copy the change there, or point the link at the repo version.
 
 **10. How does Pattie stay logged in to Amazon, and what about one-time codes?**
 The design stores the owner's Amazon session cookies in 1Password and reuses them in a persistent Tilion session. Amazon may still ask for a password or a one-time code. Pattie then asks the owner in Telegram, and the owner completes the step. Pattie never stores the Amazon password. *To settle:* test how long a session lasts before Amazon asks again.
@@ -615,7 +625,7 @@ Behind the `price_drop_trigger` flag; pick one for the demo.
 For example, "just pick for me" versus "always show me three." Behind `one_vs_three_threshold` for now.
 
 **20. Are API access and credits confirmed with Cognee, Airbyte, Persona, Amplitude and Statsig?**
-Check at kickoff. Add the open-weight model provider (for example Arcee) and the card issuer to that list.
+Check at kickoff. Add the open-weight model provider (for example Arcee) and Privacy.com to that list.
 
 ### About VPS security
 

@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from .location import Locator
 from .policy import Ledger, Policy
+from .privacy_cards import PrivacyCards, PrivacyError
 from .ranking import cart_link, rank
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -51,6 +52,7 @@ class PattieTools:
     search: Callable[[list], dict]                 # queries -> {query: [products]}
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
     memory_user: Optional[str] = None
+    cards: Optional[PrivacyCards] = None           # None until PRIVACY_API_KEY is set
     _memory: object = field(default=None, repr=False)
 
     @classmethod
@@ -69,6 +71,7 @@ class PattieTools:
             home_city=os.environ.get("PATTIE_HOME_CITY", "San Francisco"),
             search=search,
             memory_user=os.environ.get("PATTIE_USER", "anna_susan"),
+            cards=PrivacyCards.from_env(),
         )
 
     # --- shared state --------------------------------------------------------
@@ -110,31 +113,64 @@ class PattieTools:
         return self.policy.check(total, merchant, titles, self.ledger, now,
                                  owner_approved=owner_approved, urgent=urgent)
 
-    def card_status(self) -> dict:
+    def card_status(self, merchant: Optional[str] = None) -> dict:
+        """Per vendor card: Pattie's ledger and policy limits, plus the card itself at Privacy.com."""
         now, _ = self._local_now()
-        return {
-            **self.policy.budget(self.ledger, now),
-            "recent_purchases": self.ledger.recent(5),
-            "card": "not connected yet: limits shown are Pattie's policy only; the issuer's "
-                    "hard limits apply on top once the virtual card is issued",
-        }
+        out = {}
+        for m in ([merchant.lower()] if merchant else self.policy.merchants):
+            if self.policy.merchant(m) is None:
+                return {"error": f"no Pattie card for {m}", "cards": self.policy.merchants}
+            entry = {**self.policy.budget(self.ledger, now, m),
+                     "recent_purchases": self.ledger.recent(5, m)}
+            if self.cards is None:
+                entry["privacy"] = "not connected yet (no PRIVACY_API_KEY): limits shown are Pattie's policy only"
+            else:
+                try:
+                    entry["privacy"] = self.cards.status(m)
+                except PrivacyError as e:
+                    entry["privacy"] = f"unavailable: {e}"
+            out[m] = entry
+        return out
+
+    def _set_card(self, merchant: str, pause: bool) -> dict:
+        if self.policy.merchant(merchant) is None:
+            return {"error": f"no Pattie card for {merchant}", "cards": self.policy.merchants}
+        if self.cards is None:
+            return {"error": "Privacy.com isn't connected yet (no PRIVACY_API_KEY). "
+                             "Pause the card in the Privacy app instead."}
+        try:
+            card = self.cards.pause(merchant) if pause else self.cards.resume(merchant)
+        except PrivacyError as e:
+            return {"error": str(e)}
+        return {"merchant": merchant.lower(), "state": card["state"], "last_four": card["last_four"]}
+
+    def freeze_card(self, merchant: str) -> dict:
+        return self._set_card(merchant, pause=True)
+
+    def unfreeze_card(self, merchant: str) -> dict:
+        return self._set_card(merchant, pause=False)
 
     def checkout(self, asins: list, approved_total: float, titles: list,
-                 trace_id: Optional[str] = None) -> dict:
-        """Place an order with the virtual card. Not connected yet, so it always falls back to a
-        cart link, after the same policy check a real checkout would do."""
-        verdict = self.check_policy(approved_total, titles, owner_approved=True)
-        link = cart_link(asins)
+                 merchant: str = "amazon", trace_id: Optional[str] = None) -> dict:
+        """Place an order with the vendor's Privacy card. Agent checkout isn't connected yet, so
+        this always falls back (Amazon: a cart link; DoorDash: the owner orders in the app, paying
+        with the DoorDash card saved there), after the same policy check a real checkout does."""
+        merchant = merchant.lower()
+        verdict = self.check_policy(approved_total, titles, merchant=merchant, owner_approved=True)
         now, _ = self._local_now()
-        items = [{"asin": a, "title": t} for a, t in zip(asins, titles)]
+        items = [{"id": a, "title": t} for a, t in zip(asins, titles)]
         # Logged for tracing; status cart_link doesn't count toward limits (nothing was charged).
-        self.ledger.record("amazon", approved_total, items, "cart_link", now, trace_id)
+        self.ledger.record(merchant, approved_total, items, "cart_link", now, trace_id)
+        link = cart_link(asins) if merchant == "amazon" else None
+        fallback = ("Send the owner the cart link." if link else
+                    "Send the owner the restaurant link with the order written out; they pay in the "
+                    "DoorDash app with Pattie's DoorDash card.")
         if verdict["result"] != "allow":
             return {"status": "blocked", "policy": verdict, "cart_link": link,
-                    "message": f"Not buying: {verdict['reason']}. Send the owner the cart link."}
-        return {"status": "cart_link", "policy": verdict, "cart_link": link,
-                "message": "Agent checkout isn't connected yet (virtual card and Amazon "
-                           "session pending). Send the owner the cart link to check out."}
+                    "message": f"Not buying: {verdict['reason']}. {fallback}"}
+        return {"status": "fallback", "policy": verdict, "cart_link": link,
+                "card": self.policy.merchant(merchant)["card"],
+                "message": f"Agent checkout isn't connected yet. {fallback}"}
 
     # --- time and place ------------------------------------------------------
 
