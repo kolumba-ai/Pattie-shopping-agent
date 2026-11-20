@@ -15,9 +15,9 @@ Open questions, including the points where the PRD and Context.md disagree, are 
 
 | Layer | Choice | Role |
 |---|---|---|
-| User interface | **WhatsApp** | The only interface. Proposals, photos, replies, cart links and food nudges all happen in one WhatsApp chat |
-| Sources of truth and triggers | **Google Calendar** and **WhatsApp chat** | Both are authoritative and both start the agent: a new or changed calendar event, or something the owner says in chat |
-| Agent runtime | **[OpenBot](https://openbot.run/)** server on a **Hostinger VPS** | Runs the Pattie agent, its routines and its built-in WhatsApp connector |
+| User interface | **Telegram** | The only interface. Proposals, photos, replies, cart links and food nudges all happen in one Telegram chat |
+| Sources of truth and triggers | **Google Calendar** and **Telegram chat** | Both are authoritative and both start the agent: a new or changed calendar event, or something the owner says in chat |
+| Agent runtime | **[OpenBot](https://openbot.run/)** server on a **Hostinger VPS** | Runs the Pattie agent, its routines and its built-in Telegram connector |
 | Tools | **Pattie tools MCP server** on the VPS | Wraps the code in this repo: Amazon search, cart links, shopping hours, tracing |
 | Browser | **Tilion** (cloud), residential egress | Reads Amazon search and product pages |
 | Memory and state | **Cognee** + Postgres | Cognee for long-term memory; Postgres for exact records such as the basket and prices |
@@ -33,12 +33,16 @@ Open questions, including the points where the PRD and Context.md disagree, are 
 ```mermaid
 flowchart LR
     subgraph Phone["Owner's phone"]
-        WA[WhatsApp]
+        TG[Telegram]
     end
 
     subgraph Google
         GC[Google Calendar]
         GM[Gmail<br/>order confirmations]
+    end
+
+    subgraph OB["OpenBot cloud services"]
+        RELAY[Telegram relay<br/>holds the bot token]
     end
 
     subgraph Admin["Owner's laptop (on the tailnet)"]
@@ -71,7 +75,7 @@ flowchart LR
 
     AMZ[Amazon.com]
 
-    WA <-->|chat, photos<br/>linked device| AG
+    TG <-->|chat, photos| RELAY <--> AG
     GC -->|push notification| FUN --> HK -->|run routine| API
     LAP -.->|tailnet only| VPS
     SCH -->|run routine| API
@@ -99,7 +103,7 @@ Pattie has two sources of truth, and either one can start the agent:
 | Source | Authoritative for | Starts the agent when |
 |---|---|---|
 | **Google Calendar** | Scheduled plans: what's happening, when, where, and with whom | An event is added or changed |
-| **WhatsApp chat** | Anything the owner tells Pattie: plans that aren't on the calendar ("hosting dinner Saturday"), where they are ("in Austin until Friday"), preferences ("no more neck pillows"), corrections ("the flight moved to Thursday") and direct requests ("order dinner", "find a gift for Lisa") | The owner sends a message |
+| **Telegram chat** | Anything the owner tells Pattie: plans that aren't on the calendar ("hosting dinner Saturday"), where they are ("in Austin until Friday"), preferences ("no more neck pillows"), corrections ("the flight moved to Thursday") and direct requests ("order dinner", "find a gift for Lisa") | The owner sends a message |
 
 **When they disagree,** the owner's most recent explicit statement in chat wins over the calendar for that fact, because it's the newest and most direct information. "I'm not going to the meetup" cancels that event's food nudge even though the event is still on the calendar. A chat fact that changes plans has an expiry ("until Friday") or is tied to one event, so the calendar takes over again afterward.
 
@@ -115,44 +119,41 @@ Each chat-derived fact keeps the message it came from, so the owner can ask "why
 
 ## Components
 
-### WhatsApp (user interface)
+### Telegram (user interface)
 
-Pattie uses **OpenBot's built-in WhatsApp connector** ([messaging docs](https://github.com/nightly-labs/openbot/blob/main/docs/messaging.md)). Nothing needs to be built for the chat itself. Decided on Nov 20 (Emmalou), replacing Telegram; see "Why WhatsApp" below for the trade-off.
+Pattie uses **OpenBot's built-in Telegram connector** ([messaging docs](https://github.com/nightly-labs/openbot/blob/main/docs/messaging.md)). Nothing needs to be built for the chat itself.
 
-**Setup.**
+**Setup.** In OpenBot, open **Server settings → Connectors → Telegram** and choose **Open a direct chat**. Telegram opens with a one-time link that's valid for 15 minutes; press **Start**, and the chat appears in OpenBot. OpenBot then asks for the model of the **Telegram Orchestrator**, the agent that answers every Telegram chat on this server. Pattie is that orchestrator: its instructions are Pattie's.
 
-1. Get a **phone number only for Pattie** (a prepaid SIM or a second number) and set up WhatsApp on it. OpenBot's docs: "A number used only by OpenBot is safer than your personal one."
-2. In OpenBot, open **Marketplace → Apps → WhatsApp → Link WhatsApp** and choose **A number only for OpenBot**.
-3. Link it like WhatsApp Web: select **QR code** and scan it on Pattie's phone under WhatsApp → **Linked devices → Link a device** (or use **Pairing code**).
-4. Pick the model of the **WhatsApp Orchestrator** and select **Add agent**. One orchestrator answers every linked number; Pattie is that orchestrator, so its instructions are Pattie's.
-5. Under **Who can write**, add the owner's own WhatsApp number (for the demo: the demo phone). Anyone else who writes gets a 6-character code and waits for an **Approve** in OpenBot.
-
-**How messages travel.** The number is linked to the VPS as a device, so messages go **directly between the VPS and WhatsApp**, with no OpenBot relay in between (Telegram went through OpenBot's relay). That's better for tenet 1. In a direct chat every owner message reaches Pattie; in a group Pattie only answers when mentioned or replied to, so Pattie uses a **direct chat**. Short messages sent within 1.5 seconds become one request.
+**How messages travel.** The bot is OpenBot's own bot, not one the owner creates. Telegram sends messages to OpenBot's relay service, which passes them to the VPS. The relay holds the bot token, and the VPS never has it. In a direct chat, every owner message reaches Pattie. In a group, Pattie only answers when mentioned or replied to, so Pattie uses a **direct chat**.
 
 **What the connector supports, per OpenBot's docs:**
 
-- Text both ways. **Files up to 64 MB both ways**, which covers product photos. Voice messages arrive as audio files.
-- Approvals have **no buttons** on WhatsApp: an approval ends with "Reply 1 to approve or 2 to deny", and only the person who asked can answer. `stop` stops a running request.
-- WhatsApp keeps the allowed chats' messages for 90 days. Messages sent while the VPS is down wait on WhatsApp's servers; OpenBot answers messages up to one day old.
-- WhatsApp drops a linked device after **about 14 days offline**; then link the number again. **Disconnect** keeps the conversations, memories and allowed senders, so relinking the same number restores them.
+- Text messages both ways.
+- **Files up to 20 MB both ways**, which covers product photos (around 10 KB each in the kitchen-cart demo).
+- **Approve** and **Deny** buttons on approvals, and a **Stop** button on running tasks.
+- No history API: the agent only sees messages the server received since it started, plus the message being answered. Anything Pattie must remember goes to Cognee or Postgres, not to the chat.
 
 **Message design.**
 
 - **Proposals:** one message listing up to five item types with a reason for each. The owner replies "all", "none", or names the items.
 - **Options:** each option is a photo with a caption (price, rating, arrival date, why it fits, "Sponsored" if it is). One option for an obvious choice, three when it isn't (PRD flow 4). The owner replies "yes", or "A", "B" or "C".
-- **Buy confirmation:** if `checkout` requires an OpenBot approval, the owner answers "1" to buy or "2" to cancel.
 - **Cart link:** one message with the Amazon cart handoff link and the total.
-- **Allowlist:** OpenBot's **Who can write** list, plus a check of the sender's number in Pattie's tools. Messages from anyone else get no action.
+- **Allowlist:** Pattie's instructions and the tools check the sender's Telegram user ID. Messages from anyone other than the owner get no action.
 
-**Proactive messages.** Calendar events, food nudges and basket triggers start Pattie through a routine, not through a chat message. OpenBot's docs confirm a routine can post on its own: "Any agent can post to a connected place on its own initiative", using the `openbot.messaging_post` tool (find the chat with `openbot.messaging_list_places`). The routine's instructions must call that tool: "the scheduler does not post the run's answer." Unlike the official WhatsApp API, there's no 24-hour window or template approval.
+**Proactive messages.** Calendar events, food nudges and basket triggers start Pattie through a routine, not through a chat message. OpenBot's messaging docs confirm a routine can post on its own: "Any agent can post to a connected place on its own initiative", using the `openbot.messaging_post` tool (find the chat with `openbot.messaging_list_places`). The routine's instructions must call that tool, because "the scheduler does not post the run's answer." Telegram "posts only in its own chat", which is the owner's direct chat.
 
-**Why WhatsApp, and the risk.** Most owners already live in WhatsApp, and OpenBot links it in minutes for free. The catch, in OpenBot's words: "OpenBot uses an unofficial client, and WhatsApp can restrict or block a number that it sees as automated", and a WhatsApp protocol change can stop the connection until OpenBot updates. So:
+**Why Telegram.** OpenBot supports it out of the box, Pattie needs no phone number (the bot is OpenBot's), and the connection is official, so nothing can get blocked on demo day. WhatsApp was tried on Nov 20 and parked: see below.
 
-- Pattie only ever uses its **dedicated number**, never the owner's personal one.
-- Keep message volume low and human-paced (a few proposals a day).
-- **Telegram is the backup**: it's also built into OpenBot (**Server settings → Connectors → Telegram → Open a direct chat**) and can be connected before the demo as a fallback.
-- The free official route (Meta's WhatsApp Cloud API test number) has no OpenBot connector, so it would need a custom bridge, and proactive messages would need approved templates outside a 24-hour window. Not worth it for the hackathon.
-- Pitch note: this sits uneasily with the Persona angle ("a verified, transparent agent"); see FAQ 15.
+### WhatsApp (later option)
+
+Checked on Nov 20 and parked for the hackathon, because Pattie would need its own phone number and the free internet numbers we tried (TextNow-style) were rejected. Kept here for after the hackathon, and for the pitch ("next: WhatsApp, where most people already are").
+
+- **OpenBot has a built-in WhatsApp connector** ([messaging docs](https://github.com/nightly-labs/openbot/blob/main/docs/messaging.md)): **Marketplace → Apps → WhatsApp → Link WhatsApp → A number only for OpenBot**, then scan the QR code under WhatsApp → **Linked devices → Link a device**, pick the **WhatsApp Orchestrator** model, and allow the owner under **Who can write**. Messages go directly between the VPS and WhatsApp, with no relay.
+- **Risk:** "OpenBot uses an unofficial client, and WhatsApp can restrict or block a number that it sees as automated." Use a dedicated number only: a prepaid SIM or eSIM (about $5 to $15) is reliable; free VoIP numbers are mostly rejected and more likely to be flagged.
+- **Differences from Telegram:** files up to 64 MB; approvals have no buttons ("Reply 1 to approve or 2 to deny"); WhatsApp drops a linked device after about 14 days offline.
+- **Official alternatives:** Meta's WhatsApp Cloud API (free test number, up to 5 recipients, but templates outside a 24-hour window) or Twilio (paid per message). Neither has an OpenBot connector, so each needs a custom bridge.
+- **Also looked at:** [Linq](https://linqapp.com/hackathon) (iMessage, RCS and SMS for agents; free 7-day hackathon sandbox; no WhatsApp; also needs a custom bridge).
 
 ### Google Calendar
 
@@ -181,7 +182,7 @@ The calendar also provides the **time-zone setting** and **event locations**, bo
 
 **Sizing.** 2 vCPU and 8 GB of RAM is enough for OpenBot, the tools MCP server, the webhook receiver, the scheduler and Postgres. The browser runs in Tilion's cloud and the model runs remotely, so the VPS does no heavy work.
 
-**Mobile access (tenet 3).** Everyday use is WhatsApp on the phone. The owner can also open OpenBot's iOS or Android app to see Pattie's conversations, runs and approvals, through OpenBot's remote-access service. The OpenBot container publishes no web port.
+**Mobile access (tenet 3).** Everyday use is Telegram on the phone. The owner can also open OpenBot's iOS or Android app to see Pattie's conversations, runs and approvals, through OpenBot's remote-access service. The OpenBot container publishes no web port.
 
 **License.** OpenBot uses the PolyForm Noncommercial 1.0.0 license: free for personal and noncommercial use, including this hackathon.
 
@@ -234,15 +235,15 @@ The tools server reaches Amazon through Tilion's cloud browser over HTTP, using 
 - **One session per shopping sitting.** Open a session, visit the homepage, run the searches, release it (`with t.session(residential=True)`). Cookies carry across pages, the visit looks like one person browsing (Context.md, Rule 4), and billing stays short.
 - **One session at a time.** `search_products` holds a lock, so a second request waits instead of opening a parallel session.
 - **Seller filter.** Searches add `rh=p_6:ATVPDKIKX0DER` to show only items sold by Amazon.com, as in the kitchen-cart demo.
-- **Logged-in session for checkout.** Searching doesn't need an account; checkout does. The `checkout` tool opens a **persistent** Tilion session that carries the owner's Amazon cookies, loaded from Vault, and saves the refreshed cookies back to Vault afterward. If Amazon asks for a one-time code, Pattie asks the owner in WhatsApp and waits.
-- **Photos.** Search results include each product's image URL. The tools server downloads the image so Pattie can send it as a photo in WhatsApp.
+- **Logged-in session for checkout.** Searching doesn't need an account; checkout does. The `checkout` tool opens a **persistent** Tilion session that carries the owner's Amazon cookies, loaded from Vault, and saves the refreshed cookies back to Vault afterward. If Amazon asks for a one-time code, Pattie asks the owner in Telegram and waits.
+- **Photos.** Search results include each product's image URL. The tools server downloads the image so Pattie can send it as a photo in Telegram.
 - **Open product pages by ASIN** (`/dp/<ASIN>`), never through sponsored result links. A sponsored link redirects through Amazon's ad-click tracking and bills the advertiser, so following them automatically would count as automated ad clicks, which the PRD rules out. The sponsored flag is read from the search page; no ad is clicked.
-- **Failures.** A body `status` other than `ok` (`challenged`, `hard_blocked`, `rate_limited`) is an answer, not a transport error. Log it, don't retry right away, and tell the owner in WhatsApp if a search they're waiting on can't finish.
+- **Failures.** A body `status` other than `ok` (`challenged`, `hard_blocked`, `rate_limited`) is an answer, not a transport error. Log it, don't retry right away, and tell the owner in Telegram if a search they're waiting on can't finish.
 - **Fallback.** If the Product Advertising API or Creators API keys arrive (PRD), use them for product data and keep Tilion for what the API doesn't cover. The PRD's curated catalog remains the demo fallback.
 
 ### Cognee and Postgres (memory and state)
 
-Cognee holds everything Pattie should remember about the owner across conversations (tenet 7), through its v1 memory API (`remember`, `recall`, `forget`) and MCP server. This matters more with WhatsApp, because the connector has no message history.
+Cognee holds everything Pattie should remember about the owner across conversations (tenet 7), through its v1 memory API (`remember`, `recall`, `forget`) and MCP server. This matters more with Telegram, because the connector has no message history.
 
 | Memory | Examples | Written when |
 |---|---|---|
@@ -253,7 +254,7 @@ Cognee holds everything Pattie should remember about the owner across conversati
 
 **Postgres** keeps exact records that must be correct: chat-only `plan` records, the basket with prices, price history, which events were processed, open proposals waiting for a reply, and the sponsored-purchase count. Each basket item is stored in both places: exact fields in Postgres, a natural-language note in Cognee.
 
-**Ownership (tenet 1).** Run Cognee self-hosted on the VPS, or use Cognee Cloud with export available. The owner can ask in WhatsApp "what do you know about me?" (`recall`) and "forget X" (`forget`).
+**Ownership (tenet 1).** Run Cognee self-hosted on the VPS, or use Cognee Cloud with export available. The owner can ask in Telegram "what do you know about me?" (`recall`) and "forget X" (`forget`).
 
 ### Location awareness
 
@@ -261,7 +262,7 @@ The agent must always know **where the owner is** (city, time zone) and **where 
 
 | Priority | Source | Gives |
 |---|---|---|
-| 1 | Owner says so in WhatsApp, or shares a location ("I'm in Austin until Friday") | Current city and time zone, with an end date |
+| 1 | Owner says so in Telegram, or shares a location ("I'm in Austin until Friday") | Current city and time zone, with an end date |
 | 2 | Calendar event in progress, or a trip event (flight, hotel, "Weekend Tahoe") | Current city during the trip |
 | 3 | Google Calendar time-zone setting | Default time zone |
 | 4 | Home address in the Cognee profile | Default city |
@@ -287,7 +288,7 @@ The `where_am_i` tool resolves these into one answer that every time-sensitive d
 
 ### Airbyte (data layer)
 
-Airbyte moves data from the owner's accounts into Postgres on the VPS. It runs syncs on a schedule, not as a stream. That's fine for Pattie, because real-time triggers come from the calendar webhook and WhatsApp.
+Airbyte moves data from the owner's accounts into Postgres on the VPS. It runs syncs on a schedule, not as a stream. That's fine for Pattie, because real-time triggers come from the calendar webhook and Telegram.
 
 | Source | Data | Feeds |
 |---|---|---|
@@ -361,7 +362,7 @@ sequenceDiagram
     participant HK as Webhook receiver
     participant AG as Pattie (OpenBot)
     participant CG as Cognee
-    participant WA as WhatsApp
+    participant TG as Telegram
     participant TL as Tilion
     participant AM as Amplitude
 
@@ -370,16 +371,16 @@ sequenceDiagram
     AG->>AM: event_detected
     AG->>CG: recall preferences, past decisions
     AG->>AG: classify_event, where_am_i
-    AG->>WA: "Hackathon tomorrow. Power bank and snacks?"
-    WA->>AG: "yes, power bank"
+    AG->>TG: "Hackathon tomorrow. Power bank and snacks?"
+    TG->>AG: "yes, power bank"
     AG->>AG: wait for a good shopping time (unless urgent)
     AG->>TL: session (residential), search, release
     AG->>AG: rank_products (one or three)
-    AG->>WA: photo(s) with price, rating, arrival, reason, "Sponsored" label
-    WA->>AG: "yes"
+    AG->>TG: photo(s) with price, rating, arrival, reason, "Sponsored" label
+    TG->>AG: "yes"
     AG->>AG: check_policy (limits, merchant, category)
     AG->>TL: checkout in logged-in session, virtual card from Vault
-    AG->>WA: order confirmed, arrival date, budget left
+    AG->>TG: order confirmed, arrival date, budget left
     AG->>CG: remember decision
     AG->>AM: item_chosen, checkout_completed
 ```
@@ -390,7 +391,7 @@ sequenceDiagram
 
 ### Chat message to action
 
-1. The owner writes in WhatsApp: "Hosting 8 people for dinner Saturday, need serving bowls," or "I'm in Austin until Friday."
+1. The owner writes in Telegram: "Hosting 8 people for dinner Saturday, need serving bowls," or "I'm in Austin until Friday."
 2. Pattie sorts the message into one of four kinds: a direct request, a new plan, a fact (location, preference or correction), or a reply to an open proposal.
 3. **Direct request or new plan:** a new plan is saved as a `plan` record with `source: chat`. Both then follow the same steps as a calendar event. A direct request skips the proposal, because the owner already said what they want.
 4. **Fact:** saved to Cognee or the location context, with a one-line confirmation ("Got it, Austin until Friday. Deliveries go to your hotel?"). Anything already scheduled that it affects, such as a food nudge or a delivery address, is updated.
@@ -438,14 +439,14 @@ The policy is a versioned file in the repo (for example `policy.yaml`), with its
 | Quiet hours | From the owner's profile | Purchases wait unless the item is urgent |
 | Sponsored rule | Per the `sponsored_policy` flag | Applied in ranking, before the policy check |
 
-**Explicit yes stays the default.** With the auto-approve threshold at $0, every purchase still needs the owner's yes in WhatsApp, as the PRD requires. The owner can raise the threshold later ("just buy anything under $20").
+**Explicit yes stays the default.** With the auto-approve threshold at $0, every purchase still needs the owner's yes in Telegram, as the PRD requires. The owner can raise the threshold later ("just buy anything under $20").
 
 ### Checkout flow
 
 1. The owner says yes to one or more items.
 2. `check_policy` checks the total against the policy and the card's remaining limits (`card_status`).
 3. **Allow** (or ask, then yes): `checkout` runs in a logged-in Tilion session. It adds the items to the cart, selects the virtual card and the delivery address from `where_am_i`, confirms the total matches what the owner approved (within the policy's tolerance), and places the order.
-4. Pattie sends the order confirmation, arrival date and remaining monthly budget to WhatsApp.
+4. Pattie sends the order confirmation, arrival date and remaining monthly budget to Telegram.
 5. **Block, or checkout fails** (login challenge, price changed beyond the tolerance, item unavailable): Pattie sends the cart handoff link instead (`https://www.amazon.com/gp/aws/cart/add.html?ASIN.1=…&Quantity.1=1…`), and the owner checks out themselves.
 
 **Food delivery** has no consumer ordering API on DoorDash or Uber Eats. Checking out in their web apps through the browser works the same way, but is less reliable. For the demo, food stays a deep link with the order written out, and the owner pays in the app.
@@ -515,7 +516,7 @@ The VPS is reachable from the internet only where it must be. [Tailscale](https:
 
 ## Security and data ownership
 
-- **Secrets:** all in Vault (above). `.env` remains gitignored for local development only. The WhatsApp link keys for Pattie's number live in OpenBot's store on the VPS; **Disconnect** deletes them.
+- **Secrets:** all in Vault (above). `.env` remains gitignored for local development only. The Telegram bot token never reaches the VPS: OpenBot's relay holds it.
 - **Card data:** card details move from Vault directly into the browser's payment form during checkout. They never enter the model's context, Postgres, Cognee or logs. Tilion's cloud browser does see the page, so Tilion is part of the trust chain for payments (FAQ 11).
 - **Least privilege:** read-only scope on Google Calendar, Gmail limited to order confirmations, card details readable only by `checkout`.
 - **Private by default:** no inbound ports are open except the Funnel webhook path and the Airbyte exception. OpenBot's local API, the MCP servers, Postgres and Cognee aren't public. The webhook receiver checks Google's channel token on every request, because Funnel makes that path reachable by anyone.
@@ -524,11 +525,11 @@ The VPS is reachable from the internet only where it must be. [Tailscale](https:
 
 ## Build order for the hackathon
 
-1. **VPS, Tailscale, Vault, OpenBot and WhatsApp.** Create a Hostinger Ubuntu and Docker VPS. Join it to the tailnet, turn on Tailscale SSH, then close every inbound port. Start Vault and load the API keys. Install the OpenBot server with Docker Compose, sign it in, link Pattie's dedicated WhatsApp number (**Marketplace → Apps → WhatsApp**, QR code), make Pattie the WhatsApp Orchestrator, and allow the owner's number under **Who can write**. *Done when the owner can chat with Pattie in WhatsApp and no key sits in a plain file.*
-2. **Proactive message test.** Create the "calendar event" routine and start it from the local API with a fake event. *Done when the routine posts into the WhatsApp chat.* This is the riskiest OpenBot assumption (FAQ 1), so test it early.
+1. **VPS, Tailscale, Vault, OpenBot and Telegram.** Create a Hostinger Ubuntu and Docker VPS. Join it to the tailnet, turn on Tailscale SSH, then close every inbound port. Start Vault and load the API keys. Install the OpenBot server with Docker Compose, sign it in, connect Telegram as a direct chat, and make Pattie the Telegram Orchestrator. *Done when the owner can chat with Pattie in Telegram and no key sits in a plain file.*
+2. **Proactive message test.** Create the "calendar event" routine and start it from the local API with a fake event. *Done when the routine posts into the Telegram chat.* This is the riskiest OpenBot assumption (FAQ 1), so test it early.
 3. **Search and cart link.** Build the Pattie tools MCP server with `search_products` and `build_cart_link`, reading keys from Vault. *Done when "find me a power bank" returns a photo, a price and a working cart link.*
-4. **Calendar trigger.** Set up OAuth, the watch channel and the webhook receiver. *Done when a new test event produces a proposal in WhatsApp.*
-5. **Virtual card and checkout.** Issue the card with its limits, save it in the owner's Amazon account, store the details and Amazon cookies in Vault, write `policy.yaml`, and build `check_policy`, `checkout` and `card_status`. *Done when a yes in WhatsApp places a real low-cost order, and an order over the limit is blocked and falls back to a cart link.*
+4. **Calendar trigger.** Set up OAuth, the watch channel and the webhook receiver. *Done when a new test event produces a proposal in Telegram.*
+5. **Virtual card and checkout.** Issue the card with its limits, save it in the owner's Amazon account, store the details and Amazon cookies in Vault, write `policy.yaml`, and build `check_policy`, `checkout` and `card_status`. *Done when a yes in Telegram places a real low-cost order, and an order over the limit is blocked and falls back to a cart link.*
 6. **Cognee.** Profile, delivery addresses and decisions, used by `suggest_items` and the one-vs-three rule.
 7. **Tracing.** Amplitude events with `trace_id`; Statsig flags, starting with `kill_switch_amazon`, `checkout_mode`, `model_route` and `sponsored_policy`.
 8. **Location and food.** `where_am_i` and the food-nudge scheduling.
@@ -542,24 +543,24 @@ Steps 1–4 are the minimum demo. Step 5 is the payment story. Steps 6–8 cover
 
 These were open and are now settled. They're listed so readers of older versions know what changed.
 
-- **Interface:** WhatsApp, through OpenBot's built-in connector, on a dedicated number (decided Nov 20, replacing Telegram, which stays the backup). PRD and TENETS.md are updated.
+- **Interface:** Telegram, through OpenBot's built-in connector. TENETS.md is updated; the PRD isn't yet (question 6).
 - **Model:** open-weight first, Claude Sonnet as fallback, routed per step with the `model_route` flag.
 - **Secrets:** all access keys, the Amazon session and the card details live in Vault.
 - **Payments:** Pattie logs in and pays with a virtual card with spend limits, governed by the spending policy. Cart links remain the fallback. The PRD reflects this.
 
-### About OpenBot and WhatsApp
+### About OpenBot and Telegram
 
-**1. Can a routine send a proactive message into the WhatsApp chat?**
-Yes, per OpenBot's messaging docs: any agent can post on its own initiative with `openbot.messaging_post`, including in a routine run, as long as the routine's instructions call the tool. *Still to verify:* build step 2.
+**1. Can a routine send a proactive message into the Telegram chat?**
+Yes, per OpenBot's messaging docs: any agent can post on its own initiative with `openbot.messaging_post`, in a routine run too, as long as the routine's instructions call the tool (see the Telegram section). *Still to verify in practice:* build step 2. *If it fails:* use a separate Telegram bot owned by Pattie for outbound messages only.
 
 **2. Do photos show inline or as file attachments?**
-The docs say files up to 64 MB go both ways, but not whether an image appears as a photo or as a document. *To settle it:* send one product image during build step 3.
+The docs say files up to 20 MB go both ways, but not whether an image appears as a photo in the chat or as a downloadable file. *To settle it:* send one product image during build step 3.
 
-**3. Can Pattie show buttons ("A / B / C", "Buy")?**
-No: WhatsApp approvals have no buttons, the owner replies "1" to approve or "2" to deny. Options are answered by typing "A", "B" or "C".
+**3. Can Pattie show custom buttons ("A / B / C", "Buy")?**
+Only OpenBot's own **Approve/Deny** and **Stop** buttons are documented. Until custom buttons are supported, the owner types replies. One option to test: make `checkout` require an OpenBot approval, so the **Approve** button becomes the "yes, buy" tap.
 
-**4. What if WhatsApp blocks Pattie's number?**
-OpenBot's WhatsApp client is unofficial. Use a dedicated number, keep volume low, and keep the Telegram connector ready as the backup (see the WhatsApp section).
+**4. Is routing every message through OpenBot's relay acceptable under tenet 1 (ownership)?**
+OpenBot owns the bot and its token, and messages pass through OpenBot's service on the way to the VPS. The data at rest stays on the owner's server, in Cognee and in Vault. Full ownership of the channel would need a bot the owner creates with BotFather and a small bridge, giving up the built-in connector.
 
 **5. Does the hackathon count as noncommercial use under OpenBot's license?**
 Probably, since nothing is sold. A commercial Pattie would need a commercial OpenBot license or a different runtime.
@@ -579,7 +580,7 @@ The PRD requires an explicit yes for every purchase, so the auto-approve thresho
 The PRD in this repo now says Pattie logs in and purchases with the virtual card after the user's yes. The living Claude doc linked at the top of the PRD hasn't been updated yet, so Emmalou should copy the change there, or point the link at the repo version.
 
 **10. How does Pattie stay logged in to Amazon, and what about one-time codes?**
-The design stores the owner's Amazon session cookies in Vault and reuses them in a persistent Tilion session. Amazon may still ask for a password or a one-time code. Pattie then asks the owner in WhatsApp, and the owner completes the step. Pattie never stores the Amazon password. *To settle:* test how long a session lasts before Amazon asks again.
+The design stores the owner's Amazon session cookies in Vault and reuses them in a persistent Tilion session. Amazon may still ask for a password or a one-time code. Pattie then asks the owner in Telegram, and the owner completes the step. Pattie never stores the Amazon password. *To settle:* test how long a session lasts before Amazon asks again.
 
 **11. Is Tilion acceptable in the payment path?**
 During checkout, Tilion's cloud browser displays the payment page, and the card details are typed into it if Amazon asks for them. That makes Tilion part of the trust chain for card data. The mitigations: the card is virtual and limited, most checkouts use the card already saved on Amazon, and the card can be frozen at once. *Confirm Tilion's data-handling terms, or use a self-hosted Fortress browser for checkout only.*
@@ -593,7 +594,7 @@ Yes. Context.md explains that an undeclared agent operating the owner's account 
 ### About the documents
 
 **14. Messaging channel.**
-Settled: WhatsApp through OpenBot on a dedicated number, Telegram as backup. PRD, TENETS.md and this document agree.
+Settled: Telegram through OpenBot. WhatsApp was tried on Nov 20 and parked (see "WhatsApp (later option)"). PRD, TENETS.md and this document agree.
 
 **15. Residential IPs and human-like pacing: which mode does the demo use?**
 The PRD rules out "anything that disguises the agent as a human": faked browsing speed, spoofed locations, rotating residential IPs. Context.md requires human-paced, undeclared browsing. This architecture uses Tilion residential sessions, because Amazon blocked non-residential requests in testing, and puts pacing behind the `browsing_mode` flag. Pick one approach, especially since the PRD's pitch uses Persona to present Pattie as "a verified, transparent agent, not a disguised one."
