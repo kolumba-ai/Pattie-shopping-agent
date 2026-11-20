@@ -2,9 +2,11 @@
 
 Nov 20, 2026 · Emmalou Schmucker (product) · Living version: [Claude doc](https://claude.ai/artifact/5UatkYsXd49m5kqRdFWn5L)
 
+> **Updated Nov 20 (Mauricio):** Pattie can now log in to the user's Amazon account and complete purchases with a dedicated virtual card, after the user's yes. Cart links remain the fallback. The living Claude doc doesn't have this change yet. Technical details are in [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Summary
 
-Pattie is a shopping agent that lives in WhatsApp and reads your Google Calendar. It spots events that need stuff (trips, parties, hackathons), proposes what you might need, finds it on Amazon, and gets your yes before anything is bought. It also handles food: when your day is packed, it asks ahead whether to order breakfast or dinner from DoorDash or Uber Eats.
+Pattie is a shopping agent that lives in WhatsApp and reads your Google Calendar. It spots events that need stuff (trips, parties, hackathons), proposes what you might need, finds it on Amazon, gets your yes, and then buys it for you with its own virtual card, within spending limits you set. It also handles food: when your day is packed, it asks ahead whether to order breakfast or dinner from DoorDash or Uber Eats.
 
 **The problem.** Shopping tools wait for you to search. People forget the power bank before the flight, or end up hungry and ordering junk at 9pm after a full-day event. The calendar already knows what's coming, but nothing acts on it.
 
@@ -12,12 +14,14 @@ Pattie is a shopping agent that lives in WhatsApp and reads your Google Calendar
 
 ## Goals and success metrics
 
-The hackathon goal is one reliable end-to-end demo: a calendar event becomes a WhatsApp proposal, then a one-tap Amazon cart, plus one proactive food nudge.
+The hackathon goal is one reliable end-to-end demo: a calendar event becomes a WhatsApp proposal, then a placed Amazon order after one yes, plus one proactive food nudge.
 
 **Goals**
 
 - Turn a calendar event into a relevant, explained product shortlist without the user typing a search.
 - Keep the user in control: every purchase needs an explicit yes.
+- Buy for the user after that yes, so they never have to open Amazon and check out.
+- Spend safely: a dedicated virtual card with hard limits, plus a spending policy Pattie checks before every purchase.
 - Save money on non-urgent items through basket bundling and price watching.
 - Show food nudges at the right moment, based on schedule gaps.
 
@@ -26,14 +30,17 @@ The hackathon goal is one reliable end-to-end demo: a calendar event becomes a W
 - Fully autonomous checkout without user confirmation.
 - Getting around platform bot detection, or clicking or buying ads automatically.
 - Supporting every event type; we cover four in the demo.
-- Payments handled by Pattie. Checkout stays in the user's own Amazon or delivery account.
+- Storing the user's Amazon password. The user signs in once; Pattie keeps only the resulting session, in the vault.
+- Paying with anything other than Pattie's virtual card.
+- Automated checkout on DoorDash or Uber Eats. Food stays a deep link for the demo.
 
 | Metric | Target for demo | Why it matters |
 | --- | --- | --- |
 | Events correctly classified as "needs products" | 8 of 10 test events | Proposals must feel relevant, not spammy |
 | Proposal accept rate | ≥ 1 accepted item per relevant event | Shows the suggestions are useful |
-| Time from event detected to cart link | < 60 seconds | Feels like magic on stage |
-| Taps to buy | ≤ 3 (yes, open link, checkout) | Low friction while keeping control |
+| Time from event detected to options sent | < 60 seconds | Feels like magic on stage |
+| Taps to buy | 1 (the yes) | Pattie places the order; the user doesn't check out |
+| Purchases within policy | 100% | No charge ever exceeds a limit or skips the yes |
 | Long-term basket savings | Shipping fee avoided + any price drop captured | Proves the bundling policy pays off |
 
 ## Users and user stories
@@ -45,17 +52,19 @@ The primary user is a busy professional or student with a full calendar who trav
 | 1 | Pattie to notice my "Flight to NY" next week and suggest what I might need | I don't forget essentials | Must |
 | 2 | To answer with a quick yes/no or pick an option in WhatsApp | Buying takes seconds | Must |
 | 3 | One best pick when the choice is obvious, and three options when it isn't | I'm not overloaded, but stay in control | Must |
-| 4 | A one-tap link that fills my Amazon cart | I check out in my own account | Must |
+| 4 | Pattie to place the order for me after I say yes | I don't have to open Amazon and check out | Must |
 | 5 | To be asked the evening before a full-day event if I want breakfast delivered | I'm fed without planning it | Must |
 | 6 | To be asked at 6pm if I want dinner when an event runs until 7 | Food arrives when I get home | Should |
 | 7 | Non-urgent items to wait until the basket reaches $35 | I avoid shipping fees without Prime | Should |
 | 8 | Pattie to watch prices on waiting items and buy at a good price | I get a better deal | Should |
 | 9 | To see why each item was picked, and which results are sponsored | I can trust the recommendation | Must |
 | 10 | To set budget, brands, dietary preferences and quiet hours | Pattie fits me and doesn't nag | Should |
+| 11 | Hard spending limits on Pattie's card, and a way to freeze it from chat | A mistake can't cost me much | Must |
+| 12 | A confirmation after every order with the total, arrival date and budget left | I always know what was bought | Must |
 
 ## Core flows
 
-Every flow ends with an explicit user yes and a checkout the user completes in their own account. Nothing is bought until the user says yes and checks out.
+Every flow ends with an explicit user yes, a policy check, and an order Pattie places in the user's account with its virtual card. Nothing is bought until the user says yes.
 
 ```mermaid
 flowchart LR
@@ -64,13 +73,15 @@ flowchart LR
     C -- user says yes --> D[Search and rank<br/>fit, price, delivery]
     D --> E[Send 1 or 3 options<br/>sponsored labeled]
     E -- user picks --> F{Urgency tier}
-    F -- within 7 days --> G[Build cart link<br/>all items, one link]
+    F -- within 7 days --> G[Policy check<br/>limits, merchant, category]
     F -- 8 to 30 days --> H[Waiting basket<br/>price watch, $35 rule]
-    H -- trigger fires --> G
-    G -- one tap --> I[User checks out<br/>in own Amazon cart]
+    H -- trigger fires, user says yes --> G
+    G -- allowed --> I[Pattie checks out<br/>virtual card, user's account]
+    G -- blocked or checkout fails --> J[Cart link<br/>user checks out]
+    I --> K[Order confirmation<br/>total, arrival, budget left]
 ```
 
-Urgent items go straight to a cart link. Items needed in 8 to 30 days wait in the basket until a price or shipping trigger fires.
+Urgent items are ordered right after the yes. Items needed in 8 to 30 days wait in the basket until a price or shipping trigger fires.
 
 ### 1. Event detection
 
@@ -97,8 +108,8 @@ The tier comes from the days left until the event, minus a buffer for delivery.
 
 | Tier | Needed within | Delivery rule | Ordering behavior |
 | --- | --- | --- | --- |
-| ASAP | 0–2 days | Only items with guaranteed delivery before the event | Send a cart link right away |
-| This week | 3–7 days | Standard delivery with an arrival date before the event | Send a cart link within the same day |
+| ASAP | 0–2 days | Only items with guaranteed delivery before the event | Order right after the yes |
+| This week | 3–7 days | Standard delivery with an arrival date before the event | Order within the same day |
 | Long-term | 8–30 days | Any delivery option | Add to the waiting basket (flow 5) |
 
 ### 4. One option or three
@@ -119,7 +130,7 @@ Items in the long-term tier wait in a basket. Pattie checks prices once a day an
 2. An item drops at least 15% below the price it had when added.
 3. The latest safe order date for any item arrives (event date minus delivery time minus a 2-day buffer).
 
-Pattie then sends one combined cart link and a summary: "5 items, $41.20, free shipping, saved $6.80 vs. when you added them." Users with Prime skip the $35 rule and only use triggers 2 and 3.
+Pattie then asks once, with a summary: "5 items, $41.20, free shipping, saved $6.80 vs. when you added them. Order now?" After the yes, it places one combined order. Users with Prime skip the $35 rule and only use triggers 2 and 3.
 
 ### 6. Food delivery nudges
 
@@ -135,14 +146,46 @@ Pattie uses stored preferences (cuisine, dietary restrictions, budget, favorite 
 
 ## Purchase and platform access
 
-Pattie never logs in or checks out for the user. It finds products, then hands off a pre-filled cart that the user confirms in their own account. This keeps us within platform rules and keeps the demo from being blocked live.
+Pattie logs in to the user's Amazon account and checks out for them, after the user's yes, paying with a dedicated virtual card. If a purchase is blocked by policy or checkout fails, Pattie falls back to a cart link the user completes themselves.
+
+**Logging in**
+
+- The user signs in to Amazon once, in Pattie's browser session, and types the password themselves.
+- Pattie stores only the resulting session cookies, in the vault. It never sees or stores the password.
+- When Amazon asks for a password or a one-time code again, Pattie asks the user in chat, and the user completes the step.
+
+**Paying: the virtual card**
+
+- A virtual card issued only for Pattie, separate from the user's other cards, and saved as a payment method in the user's Amazon account.
+- **Hard limits at the card issuer:** a per-purchase cap, a monthly cap, and a merchant lock where the issuer supports it. A charge over a limit is declined, whatever happens on Pattie's side.
+- The card details live only in the vault and at the issuer. They never pass through the model, the chat or the logs.
+- The user can ask "freeze the card" or "how much have you spent this month?" in chat.
+
+**Spending policy**
+
+Before every checkout, Pattie checks the purchase against a spending policy the user controls. Example values:
+
+| Rule | Example | Effect |
+| --- | --- | --- |
+| Per-purchase limit | $75 | Above it, Pattie sends a cart link instead |
+| Daily / monthly limit | $150 / $400 | Counts every Pattie purchase |
+| Auto-approve threshold | $0 | Everything still needs a yes. The user can raise it later ("buy anything under $20 without asking") |
+| Allowed merchants | Amazon (sold by Amazon.com) | Anything else is blocked |
+| Never buy | Gift cards, digital currency, subscriptions | Blocked |
+
+**Checkout**
+
+1. The user says yes.
+2. Pattie checks the policy and the card's remaining limits.
+3. Pattie adds the items to the cart, picks the virtual card and the right delivery address, confirms the total matches what the user approved, and places the order.
+4. Pattie sends the order confirmation: items, total, arrival date and budget left this month.
 
 **Amazon**
 
-- **Cart handoff link.** Pattie builds `https://www.amazon.com/gp/aws/cart/add.html?ASIN.1=<asin>&Quantity.1=1&ASIN.2=…`. One tap adds every item to the user's own logged-in cart. One link can hold the whole long-term basket.
+- **Cart handoff link (fallback).** Pattie builds `https://www.amazon.com/gp/aws/cart/add.html?ASIN.1=<asin>&Quantity.1=1&ASIN.2=…`. One tap adds every item to the user's own logged-in cart. Used when the policy blocks a purchase or checkout fails.
 - **Product data.** Amazon Product Advertising API (now moving to the Creators API). It needs an Amazon Associates account; check today whether we can get keys in time. Fallback for the demo: a curated product catalog for the four demo event types.
 - **Price history.** Keepa API for current price, history and drop alerts. This powers the price watch.
-- **Revenue.** Amazon Associates affiliate commission on cart links, disclosed to the user.
+- **Revenue.** Amazon Associates affiliate commission, disclosed to the user. Commission applies to orders that come through an affiliate link, so it may not apply to orders Pattie places directly; check the Associates terms.
 
 **Food delivery**
 
@@ -156,7 +199,8 @@ Pattie never logs in or checks out for the user. It finds products, then hands o
 
 **What we will not build**
 
-- Logging in as the user, or automated checkout.
+- Buying anything without the user's yes (while the auto-approve threshold is $0) or outside the spending policy.
+- Storing the user's Amazon password, or paying with any card other than Pattie's virtual card.
 - Anything that disguises the agent as a human to get past bot detection: faked browsing speed, spoofed locations, rotating residential IPs.
 - Automated ad clicks, or a quota of ad purchases. That is click fraud, and it contradicts the anti-manipulation principle Pattie is built on.
 
@@ -168,7 +212,9 @@ One backend service runs a scheduler and a WhatsApp webhook. An LLM agent decide
 | --- | --- | --- |
 | Messaging | Twilio WhatsApp sandbox | Fastest setup. Production needs Meta Business verification, and pre-approved templates for proactive messages sent outside the 24-hour window |
 | Calendar | Google Calendar API, OAuth, polling every 15 min | Push notifications (watch channels) later |
-| Agent | Claude (latest Sonnet) with tool calls | Tools: classify_event, suggest_items, search_products, rank_products, build_cart_link, add_to_basket, suggest_food |
+| Agent | Claude (latest Sonnet) with tool calls | Tools: classify_event, suggest_items, search_products, rank_products, check_policy, checkout, card_status, build_cart_link, add_to_basket, suggest_food |
+| Payments | Virtual card from a card issuer with an API | Hard limits at the issuer; spending policy in Pattie; freeze from chat |
+| Secrets | Vault | Holds API keys, the Amazon session and the card details |
 | Product search | PA-API / Creators API, or a curated catalog fallback | Returns ASIN, title, price, rating, delivery estimate, sponsored flag |
 | Price watch | Keepa API + daily cron job | Checks basket prices and fires the order triggers |
 | Food | Deep links to DoorDash / Uber Eats, optional Instacart | Order text written by the agent |
@@ -182,6 +228,8 @@ One backend service runs a scheduler and a WhatsApp webhook. An LLM agent decide
 - `proposal`: event id, items, status (sent / accepted / declined)
 - `basket_item`: ASIN, price when added, latest safe order date, status
 - `price_point`: ASIN, price, checked_at
+- `purchase`: proposal id, items, total, policy result, order id, status (placed / failed / fell back to cart link), placed_at
+- `policy`: per-purchase, daily and monthly limits, auto-approve threshold, allowed merchants, blocked categories
 
 ### Hackathon partner services
 
@@ -207,20 +255,21 @@ The demo is a 3-minute live run on one phone, using a test calendar seeded with 
 
 1. **Setup (15 s).** Show the calendar: "Hackathon SF" tomorrow 8am–9pm, "Flight to NY" in 6 days, "Lisa's birthday" in 3 weeks, "AI Meetup" next week.
 2. **Proactive message (30 s).** Pattie messages on WhatsApp: "Hackathon tomorrow, 13 hours. Want a power bank and some snacks? Arrives tonight." Reply "yes, power bank".
-3. **One best option (30 s).** Budget is known, so Pattie sends one pick with its reason, price, rating and arrival time. Reply "yes", tap the cart link, and show the item in the Amazon cart.
+3. **One best option (30 s).** Budget is known, so Pattie sends one pick with its reason, price, rating and arrival time. Reply "yes". Pattie places the order and replies with the confirmation, arrival time and budget left. Show the order in Amazon's order history.
 4. **Three options (30 s).** For the flight, Pattie can't tell what kind of adapter is needed, so it sends three labeled options, one marked "Sponsored". Explain why it ranks where it does.
-5. **Long-term basket (30 s).** The birthday gift goes into the basket: "$22 of $35. I'll wait and watch the price." Show the basket view and a simulated price drop that triggers the order.
+5. **Long-term basket (30 s).** The birthday gift goes into the basket: "$22 of $35. I'll wait and watch the price." Show the basket view and a simulated price drop that triggers the "Order now?" question. Also show the policy at work: an item over the per-purchase limit gets a cart link instead of an order.
 6. **Food nudge (30 s).** Fast-forward to 8pm: "Hackathon starts at 8 tomorrow. Breakfast to the venue at 8:15?" Reply "yes", get the DoorDash link with the order written out.
-7. **Close (15 s).** Pattie acted on the calendar, explained every pick, labeled sponsored items, and never bought anything without a yes.
+7. **Close (15 s).** Pattie acted on the calendar, explained every pick, labeled sponsored items, bought on its own card within hard limits, and never bought anything without a yes.
 
-**In scope:** flows 1–6 for the four seeded events, one test user, a curated catalog if the API keys don't arrive.
-**Out of scope:** onboarding UI, multiple users, real payments, Uber Eats integration beyond a link.
+**In scope:** flows 1–6 for the four seeded events, one test user, a curated catalog if the API keys don't arrive, one real low-cost order on the virtual card.
+**Out of scope:** onboarding UI, multiple users, automated food checkout, Uber Eats integration beyond a link.
 
 **Owners**
 
 - [ ] Product spec, demo script, seed calendar, pitch — Emmalou
 - [ ] Backend, WhatsApp, Calendar, agent tools — Mauricio
 - [ ] Product catalog / PA-API keys and Keepa key — owner to be decided
+- [ ] Virtual card issued with limits, Amazon sign-in, vault set up — owner to be decided
 - [ ] Dry run of the full demo twice before judging — both
 
 ## Risks and open questions
@@ -233,6 +282,11 @@ The demo is a 3-minute live run on one phone, using a test calendar seeded with 
 | Wrong urgency tier or delivery date | Item arrives after the event | Use delivery estimates from the product data, plus a 2-day buffer |
 | Food nudge at a bad moment | Annoying | Quiet hours, one nudge per meal, easy "stop food suggestions" |
 | Calendar privacy concerns | Users won't connect it | Read-only scope, only titles/times/locations used, clear opt-in |
+| Amazon flags or suspends the account for agent activity | User loses their Amazon account | One switch turns agent checkout off and falls back to cart links; see Context.md on Amazon's terms |
+| Wrong item or amount bought | Money lost | Yes required, total checked against the approved amount, hard card limits, Amazon returns |
+| Card details leak | Fraudulent charges | Virtual card with low limits, details only in the vault, freeze from chat |
+| Login challenge or one-time code during checkout | Order stalls | Pattie asks the user in chat; falls back to a cart link |
+| Checkout breaks live on stage | Demo fails | Pre-test the exact item; cart link fallback is automatic |
 
 **Open questions**
 
@@ -241,3 +295,6 @@ The demo is a 3-minute live run on one phone, using a test calendar seeded with 
 - [ ] Price-drop trigger: 15% the right number, or relative to Keepa's 90-day low?
 - [ ] Do we show a web view for the long-term basket, or keep everything in WhatsApp?
 - [ ] Confirm API access and credits with Cognee, Airbyte, Persona and Amplitude + Statsig at kickoff.
+- [ ] Which card issuer can issue a limited virtual card today (Privacy.com, Lithic, Stripe Issuing)?
+- [ ] What are the real limits, and should the auto-approve threshold ever go above $0?
+- [ ] How does the Persona pitch ("a verified, transparent agent") fit with Pattie logging in to Amazon?

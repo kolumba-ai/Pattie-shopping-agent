@@ -8,7 +8,7 @@ Personal Agents Hackathon, San Francisco, November 20, 2026
 
 3. **Mobile.** The agent is built for mobile and works from the owner's phone.
 
-4. **Proactive.** The agent acts on its own when something happens: an event on the owner's calendar, or a message in the WhatsApp text box.
+4. **Proactive.** The agent acts on its own when something happens: an event on the owner's calendar, or a message in the Telegram chat.
 
 5. **Cost effective.** The agent runs on an open model to keep costs low.
 
