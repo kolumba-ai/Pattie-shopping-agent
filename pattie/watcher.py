@@ -21,6 +21,7 @@ import time
 from datetime import datetime, timedelta
 
 import anthropic
+from amplitude import BaseEvent
 
 from .classifier import Classifier, ClassifierError
 from .ranking import format_offer
@@ -30,13 +31,18 @@ from .store import Store
 LOOKAHEAD_DAYS = 30  # PRD flow 1
 
 
-def poll(source, store, classifier, now: datetime, tz: str, out=print, offers_fn=None) -> list:
+def poll(source, store, classifier, now: datetime, tz: str, out=print, offers_fn=None,
+         user: str = None) -> list:
     """One pass: pull changes, record them, classify anything new in the window."""
+    from .analytics import client as amplitude  # imported here, after .env is loaded
+
     changes = source.fetch_changes()
     for ev in changes:
         kind = store.upsert(ev)
         if kind != "unchanged":
             out(f"[{kind:>9}] {ev['title'] or '(untitled)'}  {ev['start']}")
+        if kind in ("new", "changed") and amplitude is not None and user:
+            amplitude.track(BaseEvent(event_type="event_detected", user_id=user))
 
     decisions = []
     window_end = now + timedelta(days=LOOKAHEAD_DAYS)
@@ -176,10 +182,14 @@ def main(argv=None) -> None:
           f"(every {args.interval}s, now = {clock():%Y-%m-%d %H:%M %Z}, "
           f"memory {'on for ' + args.user if memory else 'off'})", file=sys.stderr)
     while True:
-        for ev, d in poll(source, store, classifier, clock(), args.tz, out, offers_fn):
+        for ev, d in poll(source, store, classifier, clock(), args.tz, out, offers_fn,
+                          user=args.user):
             if args.json:
                 print(json.dumps({"event": ev, "decision": d}), flush=True)
         if args.once:
+            from .analytics import flush_and_wait
+
+            flush_and_wait()  # a one-shot run exits right away; send queued events first
             return
         time.sleep(args.interval)
 
