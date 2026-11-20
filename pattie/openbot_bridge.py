@@ -34,11 +34,14 @@ from pathlib import Path
 from typing import Callable, Optional
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS nudge (
-    id       TEXT PRIMARY KEY,          -- event id + meal, so an edited event replaces its nudge
-    ask_at   TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS outbox (
+    id       TEXT PRIMARY KEY,          -- event id + kind (+ meal): an edited event replaces its entry
+    routine  TEXT NOT NULL,
+    due_at   TEXT NOT NULL,             -- now for product needs, ask_at for food nudges
     payload  TEXT NOT NULL,
-    sent_at  TEXT
+    sent_at  TEXT,
+    tries    INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT
 );
 """
 
@@ -115,43 +118,58 @@ class Bridge:
         self.db = sqlite3.connect(db_path)
         self.db.executescript(SCHEMA)
 
+    def _queue(self, entry_id: str, routine: str, due_at: str, payload: dict) -> None:
+        self.db.execute("INSERT OR REPLACE INTO outbox (id, routine, due_at, payload, sent_at, tries) "
+                        "VALUES (?, ?, ?, ?, NULL, 0)", (entry_id, routine, due_at, json.dumps(payload)))
+        self.db.commit()
+
     def handle(self, line: str) -> None:
+        """Queue what this decision needs. Delivery happens in send_due, with retries, so nothing is
+        lost while OpenBot is restarting or its local API isn't turned on yet."""
         msg = json.loads(line)
         ev, d = msg.get("event", {}), msg.get("decision", {})
         title = ev.get("title", "?")
         if d.get("needs_products"):
-            payload = {"kind": "calendar_event", "event": ev, "decision": d}
-            self._run(self.routine_event, payload, f"products for {title!r}")
+            self._queue(f"{ev.get('id')}:products", self.routine_event, self.clock().isoformat(),
+                        {"kind": "calendar_event", "event": ev, "decision": d})
+            self.log(f"queued products for {title!r}")
         for n in d.get("food_nudges", []):
-            nid = f"{ev.get('id')}:{n['meal']}"
             payload = {"kind": "food_nudge", "event": {k: ev.get(k) for k in ("id", "title", "start", "end", "location")},
                        "nudge": n}
-            self.db.execute("INSERT OR REPLACE INTO nudge (id, ask_at, payload, sent_at) VALUES (?, ?, ?, NULL)",
-                            (nid, n["ask_at"], json.dumps(payload)))
-            self.db.commit()
+            self._queue(f"{ev.get('id')}:food:{n['meal']}", self.routine_food, n["ask_at"], payload)
             self.log(f"scheduled {n['meal']} nudge for {title!r} at {n['ask_at']}")
         if not d.get("needs_products") and not d.get("food_nudges"):
             self.log(f"skip {title!r}: needs nothing")
+        self.send_due()
 
     def send_due(self) -> int:
         now, sent = self.clock(), 0
-        for nid, ask_at, payload in self.db.execute(
-                "SELECT id, ask_at, payload FROM nudge WHERE sent_at IS NULL").fetchall():
-            if datetime.fromisoformat(ask_at) <= now:
-                if self._run(self.routine_food, json.loads(payload), f"food nudge {nid}"):
-                    self.db.execute("UPDATE nudge SET sent_at = ? WHERE id = ?", (now.isoformat(), nid))
-                    self.db.commit()
-                    sent += 1
+        for eid, routine, due_at, payload in self.db.execute(
+                "SELECT id, routine, due_at, payload FROM outbox WHERE sent_at IS NULL ORDER BY due_at").fetchall():
+            if datetime.fromisoformat(due_at) > now:
+                continue
+            error = self._run(routine, json.loads(payload), eid)
+            if error is None:
+                self.db.execute("UPDATE outbox SET sent_at = ? WHERE id = ?", (now.isoformat(), eid))
+                sent += 1
+            else:
+                self.db.execute("UPDATE outbox SET tries = tries + 1, last_error = ? WHERE id = ?", (error, eid))
+            self.db.commit()
         return sent
 
-    def _run(self, routine: str, payload: dict, what: str) -> bool:
+    def pending(self) -> int:
+        return self.db.execute("SELECT COUNT(*) FROM outbox WHERE sent_at IS NULL").fetchone()[0]
+
+    def _run(self, routine: str, payload: dict, what: str) -> Optional[str]:
+        """None on success, otherwise the error (the entry stays queued and is retried)."""
         try:
             self.api.run(self.agent, routine, payload)
             self.log(f"started {routine!r}: {what}")
-            return True
+            return None
         except OpenBotError as e:
-            self.log(f"could not start {routine!r} ({what}): {e}")
-            return False
+            self.log(f"could not start {routine!r} ({what}), will retry: {e}")
+            self.api._ids.clear()  # routines may have been renamed or re-created
+            return str(e)
 
 
 def main() -> None:

@@ -69,17 +69,22 @@ def test_food_nudge_waits_until_ask_at_and_sends_once():
     bridge2, fake2, _, _ = setup()
     bridge2.handle(line({"needs_products": False, "food_nudges": [NUDGE]}))
     bridge2.handle(line({"needs_products": False, "food_nudges": [{**NUDGE, "ask_at": "2026-11-20T21:00:00-08:00"}]}))
-    assert bridge2.db.execute("SELECT COUNT(*) FROM nudge").fetchone()[0] == 1
+    assert bridge2.db.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 1
 
 
 def test_nothing_needed_and_openbot_not_ready():
     bridge, fake, logs, _ = setup()
     bridge.handle(line({"needs_products": False, "items": [], "food_nudges": []}))
     assert fake.runs == [] and "needs nothing" in logs[-1]
-    missing = Bridge(OpenBotAPI(tempfile.mkdtemp()), tempfile.NamedTemporaryFile(suffix=".db", delete=False).name,
-                     log=logs.append)
+    auto = Path(tempfile.mkdtemp())
+    missing = Bridge(OpenBotAPI(str(auto), http=FakeOpenBot()),
+                     tempfile.NamedTemporaryFile(suffix=".db", delete=False).name, log=logs.append)
     missing.handle(line({"needs_products": True, "items": [], "food_nudges": []}))
-    assert "Local scripts" in logs[-1]   # explains how to turn the API on
+    assert "Local scripts" in logs[-1] and missing.pending() == 1   # explained, and kept for later
+    # once OpenBot's local API is turned on, the queued decision is delivered
+    (auto / "url").write_text("http://127.0.0.1:41234" + chr(10))
+    (auto / "headers").write_text("Authorization: Bearer test-token" + chr(10))
+    assert missing.send_due() == 1 and missing.pending() == 0
 
 
 if __name__ == "__main__":
