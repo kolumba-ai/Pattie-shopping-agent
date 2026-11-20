@@ -1,0 +1,2 @@
+# Tools server only. Memory (Cognee) is added later: remember/recall return an error until then.
+mcp>=1.12,<2

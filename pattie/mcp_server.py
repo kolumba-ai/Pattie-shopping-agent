@@ -141,9 +141,11 @@ def main(argv=None) -> None:
     p = argparse.ArgumentParser(description="Pattie tools MCP server")
     p.add_argument("--http", action="store_true", help="serve streamable HTTP instead of stdio")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--host", default="127.0.0.1",
+                   help="127.0.0.1 by default; in Docker use 0.0.0.0 on a private network with no published port")
     args = p.parse_args(argv)
     if args.http:
-        mcp.settings.host, mcp.settings.port = "127.0.0.1", args.port  # never on a public interface
+        mcp.settings.host, mcp.settings.port = args.host, args.port  # never on a public interface
         mcp.run(transport="streamable-http")
     else:
         mcp.run()
