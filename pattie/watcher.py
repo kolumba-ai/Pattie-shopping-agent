@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta
 
 import anthropic
@@ -32,17 +33,32 @@ LOOKAHEAD_DAYS = 30  # PRD flow 1
 
 
 def poll(source, store, classifier, now: datetime, tz: str, out=print, offers_fn=None,
-         user: str = None) -> list:
-    """One pass: pull changes, record them, classify anything new in the window."""
+         user: str = None, audit=None) -> list:
+    """One pass: pull changes, record them, classify anything new in the window.
+    `audit` (pattie.audit.AuditTrail) records every step in SingleStore, if configured."""
     from .analytics import client as amplitude  # imported here, after .env is loaded
 
+    def record(trace, step, ev, detail):
+        if audit is None or not audit.enabled:
+            return
+        try:
+            audit.record(trace, step, ev, detail)
+        except Exception as e:  # the audit trail must never stop Pattie
+            out(f"  ! audit trail write failed ({step}): {e}")
+
+    traces = {}  # event id -> trace id, so one event's steps share a trace
     changes = source.fetch_changes()
     for ev in changes:
         kind = store.upsert(ev)
         if kind != "unchanged":
             out(f"[{kind:>9}] {ev['title'] or '(untitled)'}  {ev['start']}")
-        if kind in ("new", "changed") and amplitude is not None and user:
-            amplitude.track(BaseEvent(event_type="event_detected", user_id=user))
+        if kind in ("new", "changed"):
+            if amplitude is not None and user:
+                amplitude.track(BaseEvent(event_type="event_detected", user_id=user))
+            traces[ev["id"]] = trace = str(uuid.uuid4())
+            record(trace, "event_detected", ev, {
+                "kind": kind, "start": ev["start"], "end": ev["end"],
+                "location": ev.get("location"), "description": ev.get("description")})
 
     decisions = []
     window_end = now + timedelta(days=LOOKAHEAD_DAYS)
@@ -64,6 +80,13 @@ def poll(source, store, classifier, now: datetime, tz: str, out=print, offers_fn
                 decision["offers"] = offers_fn(decision)
             except Exception as e:  # search is best effort; the decision still stands
                 out(f"  ! Amazon search failed for '{ev['title']}': {e}")
+        trace = traces.get(ev["id"]) or str(uuid.uuid4())
+        if decision.get("memory"):
+            record(trace, "memory_recalled", ev, {"memory": decision["memory"]})
+        record(trace, "decision_made", ev,
+               {k: v for k, v in decision.items() if k not in ("memory", "offers")})
+        if decision.get("offers"):
+            record(trace, "offers_ranked", ev, {"offers": decision["offers"]})
         store.save_decision(ev["id"], decision, now.isoformat())
         decisions.append((ev, decision))
         out(format_decision(ev, decision))
@@ -148,6 +171,18 @@ def main(argv=None) -> None:
             print(f"! Cognee memory unavailable, continuing without it: {e}", file=sys.stderr)
     classifier = Classifier(args.tz, memory)
 
+    audit = None
+    try:
+        from .audit import AuditTrail
+        audit = AuditTrail(args.user)
+        if not audit.enabled:
+            print("! SingleStore not configured: no audit trail (see pattie/audit.py)",
+                  file=sys.stderr)
+    except Exception as e:
+        print(f"! SingleStore audit trail unavailable, continuing without it: {e}",
+              file=sys.stderr)
+        audit = None
+
     offers_fn = None
     if not args.no_search and os.path.exists(args.prefs):
         from .offers import amazon_live_search, make_offers, saved_search
@@ -183,7 +218,7 @@ def main(argv=None) -> None:
           f"memory {'on for ' + args.user if memory else 'off'})", file=sys.stderr)
     while True:
         for ev, d in poll(source, store, classifier, clock(), args.tz, out, offers_fn,
-                          user=args.user):
+                          user=args.user, audit=audit):
             if args.json:
                 print(json.dumps({"event": ev, "decision": d}), flush=True)
         if args.once:

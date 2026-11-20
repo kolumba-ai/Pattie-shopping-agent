@@ -5,3 +5,4 @@ google-auth>=2.50.0
 cognee[anthropic,turso]==1.6.10
 mcp>=1.12,<2
 amplitude-analytics>=1.2.3
+singlestoredb>=1.20
