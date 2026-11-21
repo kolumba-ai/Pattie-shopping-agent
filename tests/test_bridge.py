@@ -97,6 +97,24 @@ def test_failed_delivery_is_kept_and_retried():
     assert bridge.send_due() == 1 and bridge.pending() == 0
 
 
+def test_bridge_works_from_another_thread():
+    """pattie.app creates the bridge in the main thread and runs it in the calendar thread."""
+    import threading
+    bridge, delivery, _, _ = setup()
+    errors = []
+
+    def run():
+        try:
+            bridge.handle(line({"needs_products": True, "items": [], "food_nudges": []}))
+            bridge.send_due()
+        except Exception as e:
+            errors.append(e)
+    th = threading.Thread(target=run)
+    th.start()
+    th.join()
+    assert errors == [] and len(delivery.runs) == 1
+
+
 def test_nothing_needed():
     bridge, delivery, logs, _ = setup()
     bridge.handle(line({"needs_products": False, "items": [], "food_nudges": []}))

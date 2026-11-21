@@ -87,7 +87,8 @@ class Bridge:
         self.api, self.agent = api, agent
         self.routine_event, self.routine_food = routine_event, routine_food
         self.clock, self.log = clock, log
-        self.db = sqlite3.connect(db_path)
+        # Created in the main thread, used only by the calendar thread (pattie.app)
+        self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.executescript(SCHEMA)
 
     def _queue(self, entry_id: str, routine: str, due_at: str, payload: dict) -> None:
