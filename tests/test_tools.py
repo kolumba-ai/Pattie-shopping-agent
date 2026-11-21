@@ -141,12 +141,18 @@ def test_find_offers_and_checkout_fallback():
     offer = t.find_offers("power bank", "Anker power bank", "accessories", specific=True, days_until=1)
     assert offer["mode"] == "one" and offer["picks"][0]["asin"] == "TESTPB0001", offer
     pick = offer["picks"][0]
+    default = t.checkout([pick["asin"]], pick["price"], [pick["title"]])
+    assert default["status"] == "cart_link" and "ASIN.1=TESTPB0001" in default["cart_link"]
+    assert t.card_status()["amazon"]["spent_today"] == 0      # nothing charged
+    import os
+    os.environ["PATTIE_CHECKOUT_MODE"] = "agent_browser"     # off by default; tested for completeness
     out = t.checkout([pick["asin"]], pick["price"], [pick["title"]], trace_id="t-1")
+    os.environ.pop("PATTIE_CHECKOUT_MODE")
     assert out["status"] == "approved" and out["max_total"] == round(pick["price"] * 1.05, 2)
     assert any("TESTPB0001" in step for step in out["steps"])
     status = t.card_status()
     assert set(status) == {"amazon", "doordash"}
-    assert status["amazon"]["recent_purchases"][0]["status"] == "pending"
+    assert status["amazon"]["recent_purchases"][0]["status"] == "pending"   # the agent_browser one
     assert status["amazon"]["spent_today"] == pick["price"]          # pending counts toward limits
     done = t.record_order(out["purchase_id"], "placed", order_id="111-TEST", final_total=30.49)
     assert done["status"] == "placed" and done["budget"]["spent_today"] == 30.49

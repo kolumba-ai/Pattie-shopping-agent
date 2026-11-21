@@ -457,7 +457,12 @@ The policy is a versioned file in the repo, [`config/policy.json`](../config/pol
 4. Pattie sends the order confirmation, arrival time and what's left on that card this month to Telegram.
 5. **Block, or checkout fails** (login challenge, price changed beyond the tolerance, item unavailable): for Amazon, Pattie sends the cart handoff link (`https://www.amazon.com/gp/aws/cart/add.html?ASIN.1=…&Quantity.1=1…`); for DoorDash, the restaurant link with the order written out. The owner checks out themselves, still paying with Pattie's card for that vendor.
 
-**Status today:** `checkout` isn't connected to a logged-in session yet, so it always takes step 5's fallback after running the real policy check. Because the Pattie cards are the saved payment methods, even those fallback orders are paid by the card for that vendor, within its limits.
+**Status today (Nov 20, evening):** Pattie doesn't sign in to Amazon or check out there. When the agent tried to place an order in OpenBot's signed-in browser, Amazon showed: "Continued access by an unauthorized AI agent violates Amazon's Conditions of Use." So:
+
+- **OpenBot never opens Amazon.** Pattie's instructions forbid its built-in browser on Amazon: no sign-in, no browsing, no checkout.
+- **Every interaction with Amazon goes through the tools server and Tilion**, signed out: search and ranking only.
+- **`checkout` runs the spending policy and returns a one-tap cart link.** The owner places the order in their own Amazon session (step 5 above). The agent-browser checkout code remains, switched off (`PATTIE_CHECKOUT_MODE=cart_link`, the default).
+- **Agent checkout comes back only with Amazon's permission:** an official API or an agent program. We won't hide a signed-in agent from Amazon after this notice.
 
 **DoorDash** has no consumer ordering API. Automated checkout in its web app works the same way as Amazon's but is less reliable, so for the demo, food stays a deep link and the owner taps to pay.
 

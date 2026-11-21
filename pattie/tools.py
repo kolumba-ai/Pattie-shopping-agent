@@ -164,6 +164,14 @@ class PattieTools:
             self.ledger.record(merchant, approved_total, items, "cart_link", now, trace_id)
             return {"status": "blocked", "policy": verdict, "cart_link": link,
                     "message": f"Not buying: {verdict['reason']}. Send the owner the cart link instead."}
+        if os.environ.get("PATTIE_CHECKOUT_MODE", "cart_link") != "agent_browser":
+            # Default: the owner places the order. Amazon told this account that AI-agent access
+            # violates its Conditions of Use, so the agent never signs in or checks out on Amazon.
+            self.ledger.record(merchant, approved_total, items, "cart_link", now, trace_id)
+            return {"status": "cart_link", "policy": verdict, "cart_link": link,
+                    "message": "Approved by the spending policy. Send the owner this cart link: one tap adds "
+                               "the items to their own Amazon cart, and they place the order themselves. "
+                               "Don't open Amazon in your browser."}
         limit = round(approved_total * (1 + self.policy["price_tolerance_pct"] / 100), 2)
         purchase_id = self.ledger.record(merchant, approved_total, items, "pending", now, trace_id)
         steps = ([f"Open https://www.amazon.com/dp/{a} in your browser and click Add to Cart." for a in asins]

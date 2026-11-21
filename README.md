@@ -24,7 +24,7 @@ flowchart LR
 1. **Calendar event:** the watcher reads the calendar with Google's API and asks Claude what the event needs: products, a food nudge, or nothing.
 2. **Proposal:** Pattie messages you in Telegram, for example "Hackathon tomorrow, 13 hours. Want a power bank and some snacks?"
 3. **Search and rank:** on a yes, Pattie searches Amazon through Tilion and offers **one best pick** when the choice is obvious, or **three options** (cheapest, best rated, one more) when it isn't. Sponsored results are always labeled and never ranked higher for being sponsored.
-4. **Buy:** after your yes, the spending policy checks the vendor's limits, and Pattie orders on that vendor's Privacy.com card. If a purchase is over a limit, you get a one-tap Amazon cart link instead.
+4. **Buy:** after your yes, the spending policy checks the vendor's limits and Pattie sends a one-tap Amazon cart link; you place the order in your own account. Pattie never signs in to Amazon: when it tried to check out in a signed-in browser, Amazon flagged it as an unauthorized AI agent, so agent checkout waits for Amazon's permission.
 
 ## Principles
 
@@ -42,8 +42,9 @@ From [TENETS.md](TENETS.md): the owner keeps control of their data; the provider
 | Spending policy and ledger, per vendor | Working, with tests |
 | Privacy.com card client (status, freeze, unfreeze) | Built and tested; cards not connected yet |
 | Bridge from the watcher to OpenBot routines | Running; delivers once Pattie's routines exist |
-| Telegram through OpenBot | In progress |
-| Agent checkout with the Privacy cards | Not yet: checkout falls back to a cart link |
+| Telegram through OpenBot | In progress; the demo runs in the OpenBot app |
+| Calendar events reaching Pattie (watcher, bridge, OpenBot routines) | Working |
+| Agent checkout | Paused: Amazon flagged signed-in agent checkout. Checkout sends a policy-checked cart link |
 
 ## Stack
 

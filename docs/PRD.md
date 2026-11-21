@@ -3,6 +3,8 @@
 Nov 20, 2026 · Emmalou Schmucker (product) · Living version: [Claude doc](https://claude.ai/artifact/5UatkYsXd49m5kqRdFWn5L)
 
 > **Updated Nov 20 (Mauricio):** Pattie can now log in to the user's Amazon account and complete purchases with Privacy.com virtual cards (one for Amazon, one for DoorDash), after the user's yes. Cart links remain the fallback. The living Claude doc doesn't have this change yet. Technical details are in [ARCHITECTURE.md](ARCHITECTURE.md).
+>
+> **Update, Nov 20 evening:** Amazon flagged the agent's signed-in checkout ("Continued access by an unauthorized AI agent violates Amazon's Conditions of Use"). Until Amazon permits agent checkout, Pattie never signs in to Amazon: it searches through Tilion, checks the spending policy and sends a one-tap cart link, and the owner places the order.
 
 ## Summary
 
