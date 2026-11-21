@@ -20,7 +20,7 @@ mcp = FastMCP(
     "pattie-tools",
     instructions=(
         "Pattie's shopping tools. Flow: find_offers -> show the owner the picks (photo, price, "
-        "rating, why, 'Sponsored' label) -> on a yes, check_policy -> checkout. If a tool returns "
+        "rating, why, 'Sponsored' label) -> on a yes, check_policy -> checkout -> place the order in your browser -> record_order. If a tool returns "
         "a cart_link instead of an order, send the owner that link. Never buy without the "
         "owner's yes. Use next_shopping_time before browsing for anything that isn't urgent."
     ),
@@ -75,12 +75,20 @@ def check_policy(total: float, titles: list[str], merchant: str = "amazon",
 @mcp.tool()
 def checkout(asins: list[str], approved_total: float, titles: list[str], merchant: str = "amazon",
              trace_id: Optional[str] = None) -> dict:
-    """Buy what the owner approved, with that vendor's Privacy.com card. Only call after a yes.
+    """Start buying what the owner approved. Only call after an explicit yes.
 
-    merchant is "amazon" (asins are ASINs) or "doordash". Until agent checkout is connected,
-    this returns a fallback: an Amazon cart link, or for DoorDash an instruction to send the
-    restaurant link so the owner orders in the app with Pattie's DoorDash card."""
+    If the spending policy allows it, returns status "approved" with steps: place the order yourself
+    in your signed-in browser (never above max_total), then call record_order. If not, returns
+    status "blocked" with a cart link to send the owner instead."""
     return tools().checkout(asins, approved_total, titles, merchant, trace_id)
+
+
+@mcp.tool()
+def record_order(purchase_id: int, status: str, order_id: Optional[str] = None,
+                 final_total: Optional[float] = None) -> dict:
+    """Record how a checkout ended: status "placed" (with the order number and final total) or
+    "failed". Returns what's left on that card's budget, to tell the owner."""
+    return tools().record_order(purchase_id, status, order_id, final_total)
 
 
 @mcp.tool()

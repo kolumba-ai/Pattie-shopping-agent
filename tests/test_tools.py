@@ -142,15 +142,18 @@ def test_find_offers_and_checkout_fallback():
     assert offer["mode"] == "one" and offer["picks"][0]["asin"] == "TESTPB0001", offer
     pick = offer["picks"][0]
     out = t.checkout([pick["asin"]], pick["price"], [pick["title"]], trace_id="t-1")
-    assert out["status"] == "fallback" and "ASIN.1=TESTPB0001" in out["cart_link"]
-    assert out["policy"]["result"] == "allow" and out["card"] == "Privacy - Pattie Amazon"
+    assert out["status"] == "approved" and out["max_total"] == round(pick["price"] * 1.05, 2)
+    assert any("TESTPB0001" in step for step in out["steps"])
     status = t.card_status()
     assert set(status) == {"amazon", "doordash"}
-    assert status["amazon"]["recent_purchases"][0]["status"] == "cart_link"
-    assert status["amazon"]["spent_today"] == 0           # nothing was charged
-    assert "not connected" in status["amazon"]["privacy"]
-    food = t.checkout(["thai-place"], 32.0, ["Pad thai for 2"], merchant="doordash")
-    assert food["status"] == "fallback" and food["cart_link"] is None and "DoorDash app" in food["message"]
+    assert status["amazon"]["recent_purchases"][0]["status"] == "pending"
+    assert status["amazon"]["spent_today"] == pick["price"]          # pending counts toward limits
+    done = t.record_order(out["purchase_id"], "placed", order_id="111-TEST", final_total=30.49)
+    assert done["status"] == "placed" and done["budget"]["spent_today"] == 30.49
+    assert "not connected" in t.card_status()["amazon"]["privacy"]
+    assert "error" in t.record_order(out["purchase_id"], "maybe")
+    blocked = t.checkout(["TESTXX0001"], 120.0, ["Big thing"])
+    assert blocked["status"] == "blocked" and "ASIN.1=TESTXX0001" in blocked["cart_link"]
     assert "Privacy" in t.freeze_card("amazon")["error"]   # no API key in tests
     blocked = t.checkout(["TESTXX0001"], 120.0, ["Big thing"])
     assert blocked["status"] == "blocked" and blocked["policy"]["rule"] == "per_purchase_limit"
@@ -211,7 +214,7 @@ def test_mcp_server_lists_tools():
         return
     names = {tool.name for tool in asyncio.run(mcp_server.mcp.list_tools())}
     expected = {"find_offers", "search_products", "build_cart_link", "check_policy", "checkout",
-                "card_status", "freeze_card", "unfreeze_card", "where_am_i", "set_location",
+                "card_status", "freeze_card", "unfreeze_card", "record_order", "where_am_i", "set_location",
                 "next_shopping_time", "remember", "recall"}
     assert expected <= names, names
 

@@ -152,25 +152,51 @@ class PattieTools:
 
     def checkout(self, asins: list, approved_total: float, titles: list,
                  merchant: str = "amazon", trace_id: Optional[str] = None) -> dict:
-        """Place an order with the vendor's Privacy card. Agent checkout isn't connected yet, so
-        this always falls back (Amazon: a cart link; DoorDash: the owner orders in the app, paying
-        with the DoorDash card saved there), after the same policy check a real checkout does."""
+        """Approve a purchase the owner said yes to. If the spending policy allows it, the agent
+        places the order itself in its signed-in browser (OpenBot keeps the vendor login in its
+        vault), then calls record_order. Otherwise it gets a cart link to send the owner."""
         merchant = merchant.lower()
         verdict = self.check_policy(approved_total, titles, merchant=merchant, owner_approved=True)
-        now, _ = self._local_now()
+        now, loc = self._local_now()
         items = [{"id": a, "title": t} for a, t in zip(asins, titles)]
-        # Logged for tracing; status cart_link doesn't count toward limits (nothing was charged).
-        self.ledger.record(merchant, approved_total, items, "cart_link", now, trace_id)
         link = cart_link(asins) if merchant == "amazon" else None
-        fallback = ("Send the owner the cart link." if link else
-                    "Send the owner the restaurant link with the order written out; they pay in the "
-                    "DoorDash app with Pattie's DoorDash card.")
         if verdict["result"] != "allow":
+            self.ledger.record(merchant, approved_total, items, "cart_link", now, trace_id)
             return {"status": "blocked", "policy": verdict, "cart_link": link,
-                    "message": f"Not buying: {verdict['reason']}. {fallback}"}
-        return {"status": "fallback", "policy": verdict, "cart_link": link,
-                "card": self.policy.merchant(merchant)["card"],
-                "message": f"Agent checkout isn't connected yet. {fallback}"}
+                    "message": f"Not buying: {verdict['reason']}. Send the owner the cart link instead."}
+        limit = round(approved_total * (1 + self.policy["price_tolerance_pct"] / 100), 2)
+        purchase_id = self.ledger.record(merchant, approved_total, items, "pending", now, trace_id)
+        steps = ([f"Open https://www.amazon.com/dp/{a} in your browser and click Add to Cart." for a in asins]
+                 if merchant == "amazon" else ["Open the restaurant page in your browser and add the items."]) + [
+            "Go to checkout. If you're asked to sign in, use the saved login from the Vault; if Amazon asks "
+            "for a one-time code or a password reset, stop and ask the owner to finish that step.",
+            f"Use the default delivery address ({loc['delivery']['packages']}) and the default payment method.",
+            f"Before placing the order, read the order total. Place the order only if it is at most ${limit:.2f}. "
+            "If it's higher, don't place it; call record_order with status 'failed' and send the cart link.",
+            "Place the order, read the order number and arrival date from the confirmation page, then call "
+            f"record_order with purchase_id {purchase_id}, the order number and the final total.",
+        ]
+        return {"status": "approved", "purchase_id": purchase_id, "policy": verdict, "max_total": limit,
+                "cart_link": link, "steps": steps,
+                "message": "The owner said yes and the spending policy allows it. Place the order now in "
+                           "your browser by following the steps, then call record_order."}
+
+    def record_order(self, purchase_id: int, status: str, order_id: Optional[str] = None,
+                     final_total: Optional[float] = None) -> dict:
+        """After a checkout: status 'placed' (with the order number) or 'failed'."""
+        if status not in ("placed", "failed"):
+            return {"error": "status must be 'placed' or 'failed'"}
+        row = self.ledger.db.execute("SELECT merchant, total FROM purchase WHERE id = ?", (purchase_id,)).fetchone()
+        if row is None:
+            return {"error": f"no purchase {purchase_id}"}
+        led = self.ledger
+        led.update(purchase_id, status, order_id)
+        if final_total is not None:
+            led.db.execute("UPDATE purchase SET total = ? WHERE id = ?", (round(final_total, 2), purchase_id))
+            led.db.commit()
+        now, _ = self._local_now()
+        return {"purchase_id": purchase_id, "status": status, "order_id": order_id,
+                "budget": self.policy.budget(led, now, row["merchant"])}
 
     # --- time and place ------------------------------------------------------
 
