@@ -5,7 +5,7 @@ sets COGNEE_SERVICE_URL to this server, so all of them read and write the same m
 
 Same settings as local memory: Claude as Cognee's LLM, local fastembed embeddings, Turso graph,
 telemetry off. Data lives in PATTIE_COGNEE_DIR (default .cognee/). Access control is off, so only
-expose it on a private network (the OpenBot Docker network, Tailscale), never publicly.
+expose it on a private network (the `pattie` Docker network, Tailscale), never publicly.
 
     python -m pattie.cognee_server --host 0.0.0.0 --port 8000
 """
@@ -20,7 +20,7 @@ def main(argv=None) -> None:
     p.add_argument("--port", type=int, default=8000)
     args = p.parse_args(argv)
 
-    from .watcher import load_env_file
+    from .tools import load_env_file  # no Amplitude dependency (the watcher's needs amplitude)
 
     load_env_file()
     os.environ.pop("COGNEE_SERVICE_URL", None)  # this process IS the server

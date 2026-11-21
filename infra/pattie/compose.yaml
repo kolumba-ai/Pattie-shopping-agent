@@ -1,5 +1,6 @@
 # Pattie: one container with the Telegram bot, the agent and the calendar watcher.
 # Outbound only (Telegram long polling, Claude API, Tilion, Google): no published ports.
+#   docker network create pattie          # once
 #   cd /opt/pattie && docker compose -f infra/pattie/compose.yaml up -d --build
 #   docker logs -f pattie        # the pairing code is printed here on first start
 services:
@@ -23,6 +24,13 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    networks:
+      - pattie
 
 volumes:
   pattie-data:
+
+networks:
+  pattie:
+    name: pattie       # private, shared with pattie-cognee; create once: docker network create pattie
+    external: true
