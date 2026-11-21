@@ -1,6 +1,6 @@
-"""Pattie tools MCP server: what the OpenBot agent calls (ARCHITECTURE.md, "Tools").
+"""Pattie tools MCP server: optional, for Claude Code and other MCP clients (the agent calls the tools directly).
 
-    .venv/bin/python -m pattie.mcp_server            # stdio (OpenBot starts it as a command)
+    .venv/bin/python -m pattie.mcp_server            # stdio (an MCP client starts it as a command)
     .venv/bin/python -m pattie.mcp_server --http     # streamable HTTP on 127.0.0.1:8765
 
 Every tool returns JSON. No tool ever returns a key, cookie or card number.

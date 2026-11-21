@@ -1,0 +1,7 @@
+# Pattie service: Telegram bot, agent (Claude API), calendar watcher. Memory (Cognee) runs in its
+# own container; remember/recall return an error here until it's wired in.
+anthropic>=2.12
+google-api-python-client>=2.198.0
+google-auth>=2.50.0
+amplitude-analytics>=1.2.3
+singlestoredb>=1.20

@@ -1,4 +1,4 @@
-"""Pattie's tools, as plain functions. pattie/mcp_server.py exposes them to OpenBot over MCP.
+"""Pattie's tools, as plain functions. pattie/agent.py calls them directly; pattie/mcp_server.py exposes them over MCP.
 
 Kept free of MCP so they can be tested directly:
 
@@ -153,7 +153,7 @@ class PattieTools:
     def checkout(self, asins: list, approved_total: float, titles: list,
                  merchant: str = "amazon", trace_id: Optional[str] = None) -> dict:
         """Approve a purchase the owner said yes to. If the spending policy allows it, the agent
-        places the order itself in its signed-in browser (OpenBot keeps the vendor login in its
+        places the order itself in its signed-in browser (off by default: PATTIE_CHECKOUT_MODE=cart_link; the vendor login lived in OpenBot's
         vault), then calls record_order. Otherwise it gets a cart link to send the owner."""
         merchant = merchant.lower()
         verdict = self.check_policy(approved_total, titles, merchant=merchant, owner_approved=True)

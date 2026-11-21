@@ -1,36 +1,23 @@
-"""Hand the watcher's decisions to the Pattie agent in OpenBot (ARCHITECTURE.md, "Routines").
+"""Hand the calendar watcher's decisions to Pattie, with a queue and retries.
 
-    python -m pattie.watcher --json | python -m pattie.openbot_bridge
+    python -m pattie.watcher --json | python -m pattie.app      (pattie/app.py runs the bridge)
 
 For every JSON line {"event": ..., "decision": ...} from the watcher:
-- needs products -> start the "Calendar event" routine now, with the event and decision as payload
-- food nudges    -> saved, and the "Food nudge" routine starts at each nudge's ask_at time
-- neither        -> nothing (the event needs nothing)
+- needs products -> a "calendar event" delivery now
+- food nudges    -> a "food nudge" delivery at each nudge's ask_at time
+- neither        -> nothing
 
-Routines are started through OpenBot's local automation API, which listens on 127.0.0.1 inside
-the OpenBot host and is turned on per agent (agent settings -> Permissions -> Local scripts).
-OpenBot writes its address to <automation>/url and its auth header to <automation>/headers.
-
-Settings:
-    OPENBOT_AUTOMATION   folder with url and headers (default /openbot-automation)
-    PATTIE_AGENT         agent name in OpenBot (default "Pattie")
-    PATTIE_ROUTINE_EVENT routine name for product needs (default "Calendar event")
-    PATTIE_ROUTINE_FOOD  routine name for food nudges (default "Food nudge")
-    PATTIE_DB            SQLite file for scheduled nudges (default pattie.sqlite3)
+Deliveries go to an outbox table and are retried until they succeed, so nothing is lost while the
+owner hasn't paired yet or Telegram is down. `delivery.run(agent, routine, payload)` does the
+work (pattie.app.AgentDelivery: run the agent, message the owner); it raises DeliveryError to retry.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import select
 import sqlite3
-import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Callable, Optional
 
 SCHEMA = """
@@ -46,15 +33,18 @@ CREATE TABLE IF NOT EXISTS outbox (
 """
 
 
-class OpenBotError(Exception):
+class DeliveryError(Exception):
     pass
 
 
-MAX_PAYLOAD = 3900  # OpenBot's local API rejects payloads over 4000 characters
+OpenBotError = DeliveryError   # old name, kept for anything still importing it
+
+
+MAX_PAYLOAD = 3900  # keeps each event the agent reads short
 
 
 def compact(payload: dict, limit: int = MAX_PAYLOAD) -> str:
-    """Shrink a payload to fit OpenBot's limit: keep the event, the item types and reasons, and
+    """Shrink a payload so the agent reads a short event: keep the event, the item types and reasons, and
     short versions of the top picks; drop detail step by step until it fits. Pattie can always call
     find_offers again for full results."""
     ev = payload.get("event", {})
@@ -90,66 +80,8 @@ def compact(payload: dict, limit: int = MAX_PAYLOAD) -> str:
     return text[:limit]  # last resort; should not happen with real events
 
 
-class OpenBotAPI:
-    """Start routines by agent and routine name through OpenBot's local automation API."""
-
-    def __init__(self, automation_dir: str, http: Optional[Callable] = None):
-        self.dir = Path(automation_dir)
-        self.http = http or self._http
-        self._ids: dict = {}
-
-    def _conn(self) -> tuple[str, dict]:
-        url_file, headers_file = self.dir / "url", self.dir / "headers"
-        if not url_file.exists():
-            raise OpenBotError(f"{url_file} not found: turn on Permissions -> Local scripts "
-                               "for the Pattie agent in OpenBot")
-        headers = {}
-        for line in headers_file.read_text().splitlines():
-            if ":" in line:
-                k, v = line.split(":", 1)
-                headers[k.strip()] = v.strip()
-        return url_file.read_text().strip().rstrip("/"), headers
-
-    @staticmethod
-    def _http(method: str, url: str, headers: dict, body: Optional[dict] = None):
-        req = urllib.request.Request(url, method=method, headers={**headers, "Content-Type": "application/json"},
-                                     data=json.dumps(body).encode() if body is not None else None)
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                raw = r.read()
-                return json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as e:
-            raise OpenBotError(f"OpenBot {e.code}: {e.read().decode(errors='replace')[:200]}") from None
-        except urllib.error.URLError as e:
-            raise OpenBotError(f"OpenBot unreachable: {e.reason}") from None
-
-    def routine_ids(self, agent: str, routine: str) -> tuple[str, str]:
-        key = (agent, routine)
-        if key not in self._ids:
-            base, headers = self._conn()
-            for a in self.http("GET", f"{base}/v1/agents", headers):
-                if a["name"].lower() == agent.lower():
-                    for r in a.get("routines", []):
-                        if r["name"].lower() == routine.lower():
-                            self._ids[key] = (a["id"], r["id"])
-                            break
-                    else:
-                        raise OpenBotError(f"agent {agent!r} has no routine {routine!r} "
-                                           f"(has: {[r['name'] for r in a.get('routines', [])]})")
-                    break
-            else:
-                raise OpenBotError(f"no agent {agent!r} with Local scripts turned on")
-        return self._ids[key]
-
-    def run(self, agent: str, routine: str, payload: dict) -> dict:
-        agent_id, routine_id = self.routine_ids(agent, routine)
-        base, headers = self._conn()
-        return self.http("POST", f"{base}/v1/agents/{agent_id}/routines/{routine_id}/run", headers,
-                         {"payload": compact(payload)})
-
-
 class Bridge:
-    def __init__(self, api: OpenBotAPI, db_path: str, agent: str = "Pattie",
+    def __init__(self, api, db_path: str, agent: str = "Pattie",
                  routine_event: str = "Calendar event", routine_food: str = "Food nudge",
                  clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), log=print):
         self.api, self.agent = api, agent
@@ -165,7 +97,7 @@ class Bridge:
 
     def handle(self, line: str) -> None:
         """Queue what this decision needs. Delivery happens in send_due, with retries, so nothing is
-        lost while OpenBot is restarting or its local API isn't turned on yet."""
+        lost while the owner hasn't paired yet or Telegram is down."""
         line = line.strip()
         if not line.startswith("{"):
             return  # the watcher's human-readable output; only JSON lines are decisions
@@ -215,29 +147,15 @@ class Bridge:
             self.api.run(self.agent, routine, payload)
             self.log(f"started {routine!r}: {what}")
             return None
-        except OpenBotError as e:
+        except DeliveryError as e:
             self.log(f"could not start {routine!r} ({what}), will retry: {e}")
-            self.api._ids.clear()  # routines may have been renamed or re-created
+            getattr(self.api, "_ids", {}).clear()
             return str(e)
 
 
 def main() -> None:
-    api = OpenBotAPI(os.environ.get("OPENBOT_AUTOMATION", "/openbot-automation"))
-    bridge = Bridge(api, os.environ.get("PATTIE_DB", "pattie.sqlite3"),
-                    agent=os.environ.get("PATTIE_AGENT", "Pattie"),
-                    routine_event=os.environ.get("PATTIE_ROUTINE_EVENT", "Calendar event"),
-                    routine_food=os.environ.get("PATTIE_ROUTINE_FOOD", "Food nudge"),
-                    log=lambda m: print(f"[bridge] {m}", file=sys.stderr, flush=True))
-    while True:
-        ready, _, _ = select.select([sys.stdin], [], [], 30)  # wake at least every 30s for due nudges
-        if ready:
-            line = sys.stdin.readline()
-            if not line:
-                break  # watcher exited
-            if line.strip():
-                bridge.handle(line)
-        bridge.send_due()
-    bridge.send_due()
+    from .app import main as app_main
+    app_main()   # the bridge runs inside pattie.app now
 
 
 if __name__ == "__main__":

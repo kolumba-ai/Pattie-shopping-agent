@@ -1,8 +1,0 @@
-# Calendar watcher + bridge. Memory talks to the shared Cognee server (infra/pattie-cognee)
-# when COGNEE_SERVICE_URL is set; without it the watcher runs with --no-memory.
-cognee[anthropic,turso]==1.6.10
-anthropic>=0.125.0
-google-api-python-client>=2.198.0
-google-auth>=2.50.0
-amplitude-analytics>=1.2.3
-singlestoredb>=1.20

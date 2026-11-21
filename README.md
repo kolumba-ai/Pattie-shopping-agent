@@ -4,7 +4,7 @@
 
 Pattie is named in honor of [Pattie Maes](https://www.media.mit.edu/people/pattie/overview/), pioneer of software agents. It watches your Google Calendar, notices events that need things (a flight, a birthday, a full-day hackathon), proposes what you might need in Telegram, finds it on Amazon, and buys it after you say yes, on a card with hard limits. When your day is packed, it asks ahead whether to order breakfast or dinner.
 
-Built at the Personal Agents Hackathon, San Francisco, November 20, 2026.
+Built at the Personal Agents Hackathon, San Francisco, November 20, 2026. After the demo, OpenBot was replaced by Pattie's own Telegram bot and agent loop, which is simpler to run and test.
 
 ## How it works
 
@@ -12,9 +12,9 @@ Built at the Personal Agents Hackathon, San Francisco, November 20, 2026.
 flowchart LR
     GC[Google Calendar] -->|new or changed event| W[Watcher<br/>classify with Claude]
     W -->|needs products / food| B[Bridge]
-    B -->|starts a routine| P[Pattie agent<br/>OpenBot]
-    TG[Telegram] <-->|proposals, yes / no| P
-    P <-->|MCP| T[Pattie tools]
+    B -->|calendar event| P[Pattie agent<br/>Claude tool use]
+    TG[Telegram bot] <-->|proposals, photos, yes / no| P
+    P --> T[Pattie tools]
     T -->|residential browser| TL[Tilion] --> AMZ[Amazon]
     T --> POL[Spending policy<br/>per-vendor limits]
     POL --> PC[Privacy.com cards<br/>Amazon, DoorDash]
@@ -38,20 +38,19 @@ From [TENETS.md](TENETS.md): the owner keeps control of their data; the provider
 | Event classification and food nudges (Claude) | Working |
 | Amazon search through Tilion, "sold by Amazon.com" only | Working; Amazon blocks non-residential traffic, so it uses Tilion's residential sessions |
 | Ranking: one pick or three, budgets, must-haves, sponsored labels | Working, with tests |
-| Pattie tools MCP server (13 tools) | Running on the server, reachable only from OpenBot |
+| Pattie agent (Claude Sonnet 5.5, tool use) and Telegram bot | Built and tested with fakes; live once the bot token is in 1Password |
 | Spending policy and ledger, per vendor | Working, with tests |
 | Privacy.com card client (status, freeze, unfreeze) | Built and tested; cards not connected yet |
-| Bridge from the watcher to OpenBot routines | Running; delivers once Pattie's routines exist |
-| Telegram through OpenBot | In progress; the demo runs in the OpenBot app |
-| Calendar events reaching Pattie (watcher, bridge, OpenBot routines) | Working |
+| Bridge from the watcher to the agent (queue, retries, food-nudge timing) | Built and tested |
+| Calendar events reaching Pattie (watcher, bridge, agent, Telegram) | Built and tested offline |
 | Agent checkout | Paused: Amazon flagged signed-in agent checkout. Checkout sends a policy-checked cart link |
 
 ## Stack
 
 | Layer | Choice |
 |---|---|
-| Chat | Telegram, through OpenBot's built-in connector |
-| Agent runtime | [OpenBot](https://openbot.run/) on a Hostinger VPS |
+| Chat | Telegram, Pattie's own bot (Bot API, long polling, owner pairing) |
+| Agent | Claude Sonnet 5.5 with tool use (Messages API), one container on a Hostinger VPS |
 | Triggers and source of truth | Google Calendar and the Telegram chat |
 | Browser | [Tilion](https://tilion.dev), residential egress |
 | Memory | Cognee |
@@ -72,7 +71,7 @@ From [TENETS.md](TENETS.md): the owner keeps control of their data; the provider
 | [docs/Amazon_Ad_Revenue.md](docs/Amazon_Ad_Revenue.md) | Amazon's ad revenue vs. retail revenue and profit, 2015–2025 |
 | [pattie/](pattie/) | The Python package: watcher, classifier, ranking, memory, tools, policy, cards, bridge |
 | [config/policy.json](config/policy.json) | Spending limits per vendor |
-| [infra/](infra/) | Server setup script, containers for the tools server and the watcher, OpenBot agent instructions |
+| [infra/](infra/) | Server setup script and the `pattie` container (bot, agent, calendar watcher) |
 | [demo/](demo/) | Demo calendar, demo persona, and the setup guide |
 | [tests/](tests/) | Tests for ranking, tools and policy, the bridge and the audit trail |
 
@@ -93,4 +92,4 @@ Live Amazon search needs a Tilion API key in `TILION_API_KEY` (see `.env.example
 ## Team
 
 - **Emmalou Schmucker**: product, PRD, calendar watcher, classifier, ranking, memory, analytics
-- **Mauricio**: architecture, server and security, tools server, spending policy, cards, OpenBot integration
+- **Mauricio**: architecture, server and security, tools, spending policy, cards, agent and Telegram bot

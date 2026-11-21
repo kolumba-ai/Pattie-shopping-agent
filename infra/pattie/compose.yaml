@@ -1,0 +1,28 @@
+# Pattie: one container with the Telegram bot, the agent and the calendar watcher.
+# Outbound only (Telegram long polling, Claude API, Tilion, Google): no published ports.
+#   cd /opt/pattie && docker compose -f infra/pattie/compose.yaml up -d --build
+#   docker logs -f pattie        # the pairing code is printed here on first start
+services:
+  pattie:
+    build:
+      context: ../..
+      dockerfile: infra/pattie/Dockerfile
+    container_name: pattie
+    restart: unless-stopped
+    env_file:
+      - /etc/pattie/op-token.env      # OP_SERVICE_ACCOUNT_TOKEN (root-only)
+      - /etc/pattie/watcher.env       # PATTIE_CALENDAR_ID=... (not a secret)
+    environment:
+      PATTIE_TZ: America/Los_Angeles
+      PATTIE_HOME_CITY: San Francisco
+      PATTIE_USER: anna_susan
+    volumes:
+      - pattie-data:/data
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+volumes:
+  pattie-data:

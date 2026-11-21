@@ -9,13 +9,22 @@ This document describes how Pattie is built. It draws on the other documents in 
 - [Context.md](../Context.md): the legal situation and the rules for shopping on Amazon
 - [shopping_hours.py](../shopping_hours.py), [tilion.py](../tilion.py), [amazon_search.py](../amazon_search.py): code that already works
 
+> **Update, Nov 21 (after the demo): OpenBot is gone.** Pattie now runs as **one container** on the VPS (`infra/pattie/`):
+> - **Telegram:** Pattie's own bot (created with BotFather, token in 1Password), Bot API over long polling, so no inbound port. The first chat that sends `/start <pairing code>` (printed in the service log) becomes the owner; everyone else is ignored.
+> - **Agent:** Claude Sonnet 5.5 through the Messages API with tool use (`pattie/agent.py`), calling Pattie's tools as Python functions, one conversation per chat in SQLite, refusal fallback on. Instructions: `pattie/instructions.md`.
+> - **Calendar:** the watcher pipes its decisions into the bridge (`pattie/bridge.py`), which queues them and hands each to the agent ("[Calendar event]" now, "[Food nudge]" at its time); the agent's message goes to the owner in Telegram.
+> - **Amazon:** unchanged. Tilion for search, a policy-checked add-to-cart link for checkout; Pattie never signs in to Amazon.
+> - **Removed:** OpenBot, its routines and local API, the `pattie-tools` and `pattie-watcher` containers. `pattie/mcp_server.py` stays as an optional MCP server for Claude Code.
+>
+> Sections below that describe OpenBot are kept for history.
+
 Open questions, including the points where the PRD and Context.md disagree, are collected in the [FAQ](#faq-open-questions) at the end.
 
 ## Stack at a glance
 
 | Layer | Choice | Role |
 |---|---|---|
-| User interface | **Telegram** | The only interface. Proposals, photos, replies, cart links and food nudges all happen in one Telegram chat |
+| User interface | **Telegram** (Pattie's own bot) | The only interface. Proposals, photos, replies, cart links and food nudges all happen in one Telegram chat |
 | Sources of truth and triggers | **Google Calendar** and **Telegram chat** | Both are authoritative and both start the agent: a new or changed calendar event, or something the owner says in chat |
 | Agent runtime | **[OpenBot](https://openbot.run/)** server on a **Hostinger VPS** | Runs the Pattie agent, its routines and its built-in Telegram connector |
 | Tools | **Pattie tools MCP server** on the VPS | Wraps the code in this repo: Amazon search, cart links, shopping hours, tracing |

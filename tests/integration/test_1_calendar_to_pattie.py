@@ -1,9 +1,8 @@
-"""Google Calendar -> watcher -> bridge -> OpenBot routines.
+"""Google Calendar -> watcher -> bridge -> Pattie (agent + Telegram).
 
-Offline: the demo calendar (.ics) goes through the real watcher, a fake classifier, and the real
-bridge into a fake OpenBot local API.
-Live: reads the real Google Calendar with the service account, and checks OpenBot's local API has
-the Pattie agent with both routines (it doesn't start a routine).
+Offline: the demo calendar (.ics) goes through the real watcher, a fake classifier, the real bridge
+and the real AgentDelivery, with a fake agent and a fake Telegram.
+Live: reads the real Google Calendar with the service account.
 """
 
 import json
@@ -38,28 +37,28 @@ class FakeClassifier:
                 "food_nudges": food_nudges(ev, start, end)}
 
 
-class FakeOpenBot:
+class FakeAgent:
     def __init__(self):
-        self.runs = []
+        self.events = []
 
-    def __call__(self, method, url, headers, body=None):
-        if method == "GET":
-            return [{"id": "agent-pattie", "name": "Pattie", "routines": [
-                {"id": "r-event", "name": "Calendar event"}, {"id": "r-food", "name": "Food nudge"}]}]
-        self.runs.append((url.rsplit("/routines/", 1)[1], json.loads(body["payload"])))
-        return {}
+    def event(self, chat_id, kind, payload):
+        self.events.append((kind, payload))
+        return f"{kind}: {payload['event']['title']}"
 
 
-def _automation_dir():
-    d = Path(tempfile.mkdtemp())
-    (d / "url").write_text("http://127.0.0.1:40000\n")
-    (d / "headers").write_text("Authorization: Bearer test\n")
-    return d
+class FakeTelegram:
+    def __init__(self):
+        self.texts = []
+
+    def text(self, chat_id, t):
+        self.texts.append((chat_id, t))
 
 
-def test_demo_calendar_reaches_openbot_routines(tmp_path, monkeypatch):
+def test_demo_calendar_reaches_pattie_in_telegram(tmp_path, monkeypatch):
     monkeypatch.delenv("AMPLITUDE_API_KEY", raising=False)
-    from pattie.openbot_bridge import Bridge, OpenBotAPI
+    from pattie.app import AgentDelivery
+    from pattie.bridge import Bridge
+    from pattie.telegram import Owner
     from pattie.sources import IcsFileSource
     from pattie.store import Store
     from pattie.watcher import poll
@@ -70,22 +69,25 @@ def test_demo_calendar_reaches_openbot_routines(tmp_path, monkeypatch):
     titles = {ev["title"] for ev, _ in decisions}
     assert "Hackathon SF" in titles, titles
 
-    fake = FakeOpenBot()
-    bridge = Bridge(OpenBotAPI(str(_automation_dir()), http=fake), str(tmp_path / "pattie.sqlite3"),
+    agent, telegram = FakeAgent(), FakeTelegram()
+    owner = Owner(str(tmp_path / "pattie.sqlite3"), pairing_code="TEST01")
+    owner.try_pair(42, "/start TEST01")
+    bridge = Bridge(AgentDelivery(agent, telegram, owner), str(tmp_path / "pattie.sqlite3"),
                     clock=lambda: NOW.astimezone(timezone.utc), log=lambda _m: None)
     for ev, d in decisions:
         bridge.handle(json.dumps({"event": ev, "decision": d}))
 
-    event_runs = [p for r, p in fake.runs if r.startswith("r-event")]
-    assert [p["event"]["title"] for p in event_runs] == ["Hackathon SF"]
-    assert event_runs[0]["decision"]["items"][0]["item"] == "power bank"
-    assert all(len(json.dumps(p)) < 4000 for _, p in fake.runs)       # OpenBot's payload limit
+    events = [p for k, p in agent.events if k == "calendar_event"]
+    assert [p["event"]["title"] for p in events] == ["Hackathon SF"]
+    assert events[0]["decision"]["items"][0]["item"] == "power bank"
+    assert all(len(json.dumps(p)) < 4000 for _, p in agent.events)    # compacted for the agent
+    assert telegram.texts == [("42", "calendar_event: Hackathon SF")]  # the owner got the message
 
     # The breakfast nudge for the 8am hackathon waits until 8pm the night before, then goes once
-    assert not any(r.startswith("r-food") for r, _ in fake.runs)
+    assert not any(k == "food_nudge" for k, _ in agent.events)
     bridge.clock = lambda: NOW.replace(hour=20, minute=1).astimezone(timezone.utc)
     assert bridge.send_due() >= 1 and bridge.send_due() == 0
-    food = [p for r, p in fake.runs if r.startswith("r-food")]
+    food = [p for k, p in agent.events if k == "food_nudge"]
     assert food[0]["nudge"]["meal"] == "breakfast" and food[0]["event"]["title"] == "Hackathon SF"
 
 
@@ -114,15 +116,3 @@ def test_live_google_calendar_read():
     events = src.fetch_changes()
     assert events, "the calendar returned no events"
     assert store.get(src.token_key), "Google didn't return a sync token"
-
-
-@pytest.mark.live
-def test_live_openbot_has_pattie_routines():
-    folder = os.environ.get("OPENBOT_AUTOMATION")
-    if not folder or not Path(folder, "url").exists():
-        pytest.skip("run on the VPS inside the watcher container (needs OpenBot's automation folder)")
-    from pattie.openbot_bridge import OpenBotAPI
-    api = OpenBotAPI(folder)
-    agent_id, routine_id = api.routine_ids("Pattie", "Calendar event")
-    assert agent_id and routine_id
-    assert all(api.routine_ids("Pattie", "Food nudge"))

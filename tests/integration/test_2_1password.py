@@ -1,12 +1,10 @@
-"""1Password: secrets reach Pattie's services by reference, and never leak to the agent.
+"""1Password: secrets reach Pattie by reference, and never leak to the agent.
 
 Offline: the container secret files hold only op:// references, and no tool result ever contains
 a secret value.
 Live: resolves every reference with the 1Password CLI and the service-account token (values are
 checked, never printed).
 
-Not testable from here: OpenBot's own 1Password app (Marketplace -> Apps -> 1Password). OpenBot
-has no API to query it; check it shows "Connected" in the app.
 """
 
 import json
@@ -20,7 +18,7 @@ import pytest
 from conftest import ROOT
 
 REF = re.compile(r"^op://[^/]+/[^/]+/[^/]+$")
-SECRET_FILES = [ROOT / "infra/pattie-tools/secrets.env", ROOT / "infra/pattie-watcher/secrets.env"]
+SECRET_FILES = [ROOT / "infra/pattie/secrets.env"]
 
 
 def _references():
@@ -42,7 +40,7 @@ def test_secret_files_hold_only_references():
 
 
 def test_no_token_or_key_committed():
-    for f in [*SECRET_FILES, ROOT / "infra/pattie-tools/compose.yaml", ROOT / "infra/pattie-watcher/compose.yaml"]:
+    for f in [*SECRET_FILES, ROOT / "infra/pattie/compose.yaml"]:
         text = f.read_text()
         assert "ops_" not in text, f"{f} looks like it contains a 1Password token"
         assert not re.search(r"sk-ant-[A-Za-z0-9]", text), f"{f} looks like it contains an Anthropic key"
@@ -53,7 +51,7 @@ def test_tool_results_never_contain_secrets(client_offline, monkeypatch):
     from pattie.tools import load_env_file
     load_env_file()
     secrets = [v for k, v in os.environ.items()
-               if k in ("TILION_API_KEY", "ANTHROPIC_API_KEY", "PRIVACY_API_KEY", "OP_SERVICE_ACCOUNT_TOKEN") and v]
+               if k in ("TILION_API_KEY", "ANTHROPIC_API_KEY", "PRIVACY_API_KEY", "OP_SERVICE_ACCOUNT_TOKEN", "TELEGRAM_BOT_TOKEN") and v]
     if not secrets:
         pytest.skip("no secrets in the environment or .env to check for (set TILION_API_KEY to run this)")
     results = [client_offline.call("card_status"), client_offline.call("where_am_i"),
@@ -68,7 +66,7 @@ def test_tool_results_never_contain_secrets(client_offline, monkeypatch):
 @pytest.mark.live
 def test_live_references_resolve_in_1password():
     if not shutil.which("op"):
-        pytest.skip("1Password CLI (op) not installed here; run inside the pattie-tools container")
+        pytest.skip("1Password CLI (op) not installed here; run inside the pattie container")
     if not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN"):
         pytest.skip("needs OP_SERVICE_ACCOUNT_TOKEN (the server's token file)")
     for name, ref in _references().items():

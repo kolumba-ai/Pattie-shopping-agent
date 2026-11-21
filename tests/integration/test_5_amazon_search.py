@@ -1,4 +1,4 @@
-"""Searching Amazon through the tools server (what Pattie calls from OpenBot).
+"""Searching Amazon through Pattie's tools (what the agent calls), via the MCP server.
 
 Offline: saved results go through the real search-and-rank path over MCP.
 Live: a real Amazon search through Tilion (sold by Amazon.com only).

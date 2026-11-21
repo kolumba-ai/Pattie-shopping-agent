@@ -1,7 +1,6 @@
-"""OpenBot -> Pattie tools (MCP over HTTP) -> Tilion.
+"""Pattie tools -> Tilion, and the optional MCP server (for Claude Code and other MCP clients).
 
-Offline: starts the tools server over streamable HTTP, the way OpenBot connects, and checks every
-tool OpenBot relies on is offered.
+Offline: starts the tools server over streamable HTTP and checks every tool is offered.
 Live: Tilion answers with the API key, and a residential session reaches Amazon's homepage.
 """
 
@@ -14,7 +13,7 @@ EXPECTED_TOOLS = {"find_offers", "search_products", "build_cart_link", "check_po
                   "set_location", "next_shopping_time", "remember", "recall"}
 
 
-def test_openbot_sees_all_pattie_tools(client_offline):
+def test_mcp_server_offers_all_pattie_tools(client_offline):
     tools = client_offline.tools()
     assert EXPECTED_TOOLS <= tools, f"missing: {EXPECTED_TOOLS - tools}"
 

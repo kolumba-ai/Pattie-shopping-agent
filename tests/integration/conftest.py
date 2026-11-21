@@ -3,8 +3,8 @@
 Offline tests use fakes and saved search results, so they run anywhere.
 Live tests talk to the real services and run only with PATTIE_LIVE=1:
 
-    .venv/bin/python -m pytest tests/integration/test_1_calendar_to_openbot.py -v
-    PATTIE_LIVE=1 .venv/bin/python -m pytest tests/integration/test_4_openbot_to_tilion.py -v -m live
+    .venv/bin/python -m pytest tests/integration/test_1_calendar_to_pattie.py -v
+    PATTIE_LIVE=1 .venv/bin/python -m pytest tests/integration/test_4_tilion.py -v -m live
 """
 
 import asyncio
@@ -87,7 +87,7 @@ def _free_port() -> int:
 
 
 def _start_mcp_server(tmp_path, saved: bool):
-    """Start pattie.mcp_server over streamable HTTP, the way OpenBot connects to it."""
+    """Start pattie.mcp_server over streamable HTTP, like any MCP client."""
     port = _free_port()
     env = {**os.environ, "PYTHONPATH": str(ROOT), "PATTIE_DB": str(tmp_path / "pattie.sqlite3")}
     if saved:
@@ -129,7 +129,7 @@ def mcp_live(tmp_path):
 
 
 class MCPClient:
-    """Calls tools on the MCP server over streamable HTTP, like OpenBot does."""
+    """Calls tools on the MCP server over streamable HTTP, like any MCP client."""
 
     def __init__(self, url):
         self.url = url
