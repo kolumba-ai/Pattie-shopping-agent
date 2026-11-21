@@ -49,9 +49,13 @@ def test_no_token_or_key_committed():
 
 
 def test_tool_results_never_contain_secrets(client_offline, monkeypatch):
-    # The server was started with the real environment; these values must never come back.
+    # The server loads the environment and .env; these values must never come back.
+    from pattie.tools import load_env_file
+    load_env_file()
     secrets = [v for k, v in os.environ.items()
                if k in ("TILION_API_KEY", "ANTHROPIC_API_KEY", "PRIVACY_API_KEY", "OP_SERVICE_ACCOUNT_TOKEN") and v]
+    if not secrets:
+        pytest.skip("no secrets in the environment or .env to check for (set TILION_API_KEY to run this)")
     results = [client_offline.call("card_status"), client_offline.call("where_am_i"),
                client_offline.call("check_policy", total=20.0, titles=["cable"]),
                client_offline.call("find_offers", item="power bank", search_query="Anker power bank",
