@@ -23,6 +23,29 @@ sys.path.insert(0, str(ROOT))
 LIVE = os.environ.get("PATTIE_LIVE") == "1"
 
 
+def _load_dotenv() -> None:
+    """Live tests read settings from the environment or the repo's git-ignored .env (README).
+    Values already in the environment win. Relative file paths are resolved from the repo root."""
+    env = ROOT / ".env"
+    if not env.exists():
+        return
+    for line in env.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if not value or os.environ.get(key):
+            continue
+        if key == "GOOGLE_APPLICATION_CREDENTIALS" and not os.path.isabs(value):
+            value = str(ROOT / value)
+        os.environ[key] = value
+
+
+if LIVE:
+    _load_dotenv()
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "live: talks to real services; needs PATTIE_LIVE=1")
 
