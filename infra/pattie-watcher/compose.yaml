@@ -2,7 +2,8 @@
 # automation API on 127.0.0.1, and mounts only OpenBot's automation folder (url + headers),
 # read-only, not the rest of OpenBot's data.
 #
-# Needs first: the Pattie agent with Permissions -> Local scripts on (creates the folder), its
+# Needs first: the Pattie agent with Permissions -> Local scripts on (OpenBot then writes
+# .config/OpenBot/automation/{url,headers}), its
 # "Calendar event" and "Food nudge" routines, and PATTIE_CALENDAR_ID in /etc/pattie/watcher.env.
 #   cd /opt/pattie && docker compose -f infra/pattie-watcher/compose.yaml up -d --build
 services:
@@ -26,7 +27,7 @@ services:
         target: /openbot-automation
         read_only: true
         volume:
-          subpath: OpenBot/automation
+          subpath: .config/OpenBot/automation
           nocopy: true
     security_opt:
       - no-new-privileges:true
