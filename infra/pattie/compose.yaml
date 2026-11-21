@@ -17,6 +17,7 @@ services:
       PATTIE_TZ: America/Los_Angeles
       PATTIE_HOME_CITY: San Francisco
       PATTIE_USER: anna_susan
+      COGNEE_SERVICE_URL: http://pattie-cognee:8000   # memory, over the private pattie network
     volumes:
       - pattie-data:/data
     security_opt:

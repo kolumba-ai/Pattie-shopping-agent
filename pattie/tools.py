@@ -234,8 +234,13 @@ class PattieTools:
 
     def _mem(self):
         if self._memory is None:
-            from .memory import Memory  # heavy import; only when memory is used
-            self._memory = Memory(self.memory_user) if self.memory_user else Memory()
+            url = os.environ.get("COGNEE_SERVICE_URL", "").strip()
+            if url:   # the shared Cognee server, over HTTP: no Cognee install needed here
+                from .cognee_client import CogneeClient
+                self._memory = CogneeClient(url, user=self.memory_user or "anna_susan")
+            else:     # local Cognee (needs the cognee package)
+                from .memory import Memory
+                self._memory = Memory(self.memory_user) if self.memory_user else Memory()
         return self._memory
 
     def remember(self, note: str) -> dict:

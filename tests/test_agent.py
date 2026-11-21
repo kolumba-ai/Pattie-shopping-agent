@@ -59,6 +59,10 @@ class FakeTools:
     def card_status(self, merchant=None):
         raise RuntimeError("ledger unavailable")
 
+    def remember(self, note):
+        self.calls.append(("remember", note))
+        return {"saved": note}
+
 
 class FakeSender:
     def __init__(self):
@@ -137,6 +141,47 @@ def test_tool_definitions_are_valid():
     for t in TOOLS:
         assert t["input_schema"]["type"] == "object" and t["description"]
         assert set(t["input_schema"].get("required", [])) <= set(t["input_schema"]["properties"])
+
+
+class FakeAmplitude:
+    def __init__(self):
+        self.events = []
+
+    def track(self, event):
+        self.events.append((event.event_type, event.event_properties))
+
+
+def test_traces_go_to_amplitude_and_findings_to_memory():
+    import time
+    claude = FakeClaude([
+        ([tool_use("t1", "find_offers", {"item": "power bank", "search_query": "Anker power bank",
+                                         "category": "accessories"})], "tool_use"),
+        ([tool_use("t2", "checkout", {"asins": ["TESTPB0001"], "approved_total": 29.99,
+                                      "titles": ["Anker Power Bank"]})], "tool_use"),
+        ([text("Here's your cart link.")], "end_turn"),
+    ])
+    tools = FakeTools()
+    agent = Agent(tools, db(), send=FakeSender(), client=claude)
+    amp = agent.amplitude = FakeAmplitude()
+    agent.chat("42", "Buy the Anker power bank")
+    for _ in range(50):                      # memory notes are saved in background threads
+        if sum(1 for c in tools.calls if c[0] == "remember") >= 2:
+            break
+        time.sleep(0.05)
+    kinds = [k for k, _ in amp.events]
+    assert kinds[0] == "agent_turn_started" and "agent_turn_finished" in kinds
+    tool_events = [p for k, p in amp.events if k == "agent_tool_called"]
+    assert [e["tool"] for e in tool_events] == ["find_offers", "checkout"] and all(e["ok"] for e in tool_events)
+    assert len({p["trace_id"] for _, p in amp.events}) == 1          # one trace for the whole turn
+    notes = [c[1] for c in tools.calls if c[0] == "remember"]
+    assert any("searched Amazon for power bank" in n and "Anker Power Bank at $29.99" in n for n in notes)
+    assert any("approved Anker Power Bank for $29.99" in n for n in notes)
+
+
+def test_no_amplitude_key_means_no_tracking():
+    agent = Agent(FakeTools(), db(), send=FakeSender(), client=FakeClaude([([text("hi")], "end_turn")]))
+    agent.amplitude = None
+    assert agent.chat("42", "hello") == "hi"
 
 
 # --- Telegram and pairing -------------------------------------------------------
