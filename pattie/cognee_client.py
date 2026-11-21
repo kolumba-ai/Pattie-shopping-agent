@@ -53,8 +53,9 @@ class CogneeClient:
             result = self._post("/api/v1/recall", json.dumps(
                 {"query": question, "datasets": [self.dataset]}).encode(), "application/json")
         except CogneeError as e:
-            if "not found" in str(e).lower() or "no data" in str(e).lower():
-                return ""
+            msg = str(e).lower()
+            if any(w in msg for w in ("not found", "no data", "nodataerror", "graph is empty", "no searchable memory")):
+                return ""   # nothing in memory yet (or still being built in the background)
             raise
         return _text(result).strip()
 

@@ -32,6 +32,14 @@ class FakeCognee(BaseHTTPRequestHandler):
         pass
 
 
+def test_empty_memory_reads_as_nothing_known():
+    from pattie.cognee_client import CogneeClient, CogneeError
+    mem = CogneeClient("http://127.0.0.1:1")
+    mem._post = lambda *a: (_ for _ in ()).throw(CogneeError(
+        "Cognee 404: No searchable memory in dataset 'x': The knowledge graph is empty. [NoDataError]"))
+    assert mem.ask("anything?") == ""
+
+
 def test_client_sends_remember_and_recall():
     from pattie.cognee_client import CogneeClient
     server = HTTPServer(("127.0.0.1", 0), FakeCognee)
@@ -59,5 +67,11 @@ def test_live_cognee_remember_and_recall():
     mem = CogneeClient(url, user="integration_test")
     marker = uuid.uuid4().hex[:8]
     mem.remember(f"Integration test {marker}: the owner prefers USB-C cables in white.")
-    answer = mem.ask("What color of USB-C cable does the owner prefer?")
-    assert isinstance(answer, str)      # the graph is built in the background; the call must succeed
+    import time
+    answer, deadline = "", time.time() + 180      # Cognee builds the graph in the background
+    while time.time() < deadline:
+        answer = mem.ask("What color of USB-C cable does the owner prefer?")
+        if answer:
+            break
+        time.sleep(10)
+    assert "white" in answer.lower(), f"memory didn't answer within 3 minutes: {answer!r}"
