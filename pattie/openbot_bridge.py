@@ -50,6 +50,46 @@ class OpenBotError(Exception):
     pass
 
 
+MAX_PAYLOAD = 3900  # OpenBot's local API rejects payloads over 4000 characters
+
+
+def compact(payload: dict, limit: int = MAX_PAYLOAD) -> str:
+    """Shrink a payload to fit OpenBot's limit: keep the event, the item types and reasons, and
+    short versions of the top picks; drop detail step by step until it fits. Pattie can always call
+    find_offers again for full results."""
+    ev = payload.get("event", {})
+    out = {"kind": payload.get("kind"),
+           "event": {k: ev.get(k) for k in ("id", "title", "start", "end", "location") if ev.get(k)}}
+    if "nudge" in payload:
+        out["nudge"] = payload["nudge"]
+    d = payload.get("decision")
+    if d:
+        out["decision"] = {k: d.get(k) for k in ("event_type", "summary", "urgency_tier", "days_until")
+                           if d.get(k) is not None}
+        out["decision"]["items"] = [{k: i.get(k) for k in ("item", "reason", "search_query", "category")}
+                                    for i in d.get("items", [])]
+        offers = []
+        for o in d.get("offers", []):
+            offers.append({"item": o.get("item"), "mode": o.get("mode"),
+                           "picks": [{"asin": p.get("asin"), "title": (p.get("title") or "")[:70],
+                                      "price": p.get("price"), "rating": p.get("rating"),
+                                      "label": p.get("label"), "sponsored": p.get("sponsored"),
+                                      "action": p.get("action")} for p in o.get("picks", [])[:3]]})
+        out["offers"] = offers
+    steps = [
+        lambda o: None,
+        lambda o: [p.pop("title", None) for off in o.get("offers", []) for p in off["picks"]],
+        lambda o: o.pop("offers", None),
+        lambda o: [i.pop("reason", None) for i in o.get("decision", {}).get("items", [])],
+    ]
+    for step in steps:
+        step(out)
+        text = json.dumps(out, ensure_ascii=False)
+        if len(text) <= limit:
+            return text
+    return text[:limit]  # last resort; should not happen with real events
+
+
 class OpenBotAPI:
     """Start routines by agent and routine name through OpenBot's local automation API."""
 
@@ -105,7 +145,7 @@ class OpenBotAPI:
         agent_id, routine_id = self.routine_ids(agent, routine)
         base, headers = self._conn()
         return self.http("POST", f"{base}/v1/agents/{agent_id}/routines/{routine_id}/run", headers,
-                         {"payload": json.dumps(payload, ensure_ascii=False)})
+                         {"payload": compact(payload)})
 
 
 class Bridge:

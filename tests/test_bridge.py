@@ -80,6 +80,25 @@ def test_ignores_non_json_output():
     assert fake.runs == [] and bridge.pending() == 0
 
 
+def test_payload_fits_openbot_limit():
+    from pattie.openbot_bridge import MAX_PAYLOAD, compact
+    picks = [{"asin": f"TEST{n:06d}", "title": "Very long product title " * 10, "price": 19.99,
+              "rating": "4.5", "label": "cheapest", "sponsored": False, "action": "order",
+              "image": "https://example.com/" + "x" * 200, "why": "reason " * 40} for n in range(3)]
+    decision = {"needs_products": True, "event_type": "full_day_event", "summary": "Long day",
+                "items": [{"item": f"item {n}", "reason": "because " * 30, "search_query": "q",
+                           "category": "accessories"} for n in range(5)],
+                "offers": [{"item": f"item {n}", "mode": "three", "picks": picks, "skipped": ["x" * 80] * 20}
+                           for n in range(5)]}
+    text = compact({"kind": "calendar_event", "event": EVENT, "decision": decision})
+    assert len(text) <= MAX_PAYLOAD
+    data = json.loads(text)
+    assert data["event"]["title"] == "Hackathon SF" and len(data["decision"]["items"]) == 5
+    bridge, fake, _, _ = setup()
+    bridge.handle(line(decision))
+    assert len(fake.runs) == 1   # sent, compacted
+
+
 def test_nothing_needed_and_openbot_not_ready():
     bridge, fake, logs, _ = setup()
     bridge.handle(line({"needs_products": False, "items": [], "food_nudges": []}))
