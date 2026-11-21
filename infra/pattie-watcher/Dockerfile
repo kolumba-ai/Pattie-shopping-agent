@@ -19,7 +19,8 @@ COPY amazon_search.py tilion.py shopping_hours.py /app/
 COPY infra/pattie-watcher/secrets.env /app/secrets.env
 COPY infra/pattie-watcher/start.sh /app/start.sh
 
-RUN useradd --system --uid 10002 --home /data pattie && mkdir -p /data && chown pattie /data
+# Same uid as OpenBot (1000): its automation files (url, headers) are readable only by that user.
+RUN useradd --uid 1000 --home /data pattie && mkdir -p /data && chown pattie /data
 USER pattie
 ENV PATTIE_DB=/data/pattie.sqlite3 PYTHONUNBUFFERED=1 OPENBOT_AUTOMATION=/openbot-automation
 CMD ["/app/start.sh"]
