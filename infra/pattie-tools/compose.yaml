@@ -13,6 +13,9 @@ services:
     environment:
       PATTIE_TZ: America/Los_Angeles
       PATTIE_HOME_CITY: San Francisco
+      # Shared memory (infra/pattie-cognee): remember/recall go there.
+      COGNEE_SERVICE_URL: http://pattie-cognee:8000
+      PATTIE_COGNEE_DIR: /tmp/cognee
     volumes:
       - pattie-data:/data
     security_opt:

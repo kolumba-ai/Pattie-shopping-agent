@@ -185,3 +185,23 @@ a purchase ledger, location and shopping-hours timing.
   default `pattie.sqlite3`), so `where_am_i` sees calendar events in progress.
 - Settings: `PATTIE_TZ`, `PATTIE_HOME_CITY`, `PATTIE_PREFS`, `PATTIE_POLICY`, `PATTIE_USER`, and
   `PATTIE_SEARCH_RESULTS` (a saved-results JSON file instead of live Amazon, as an on-stage fallback).
+
+### Shared memory for the team (Cognee server)
+
+By default memory lives in `.cognee/` on one machine. To share it (server, Mauricio's laptop,
+Emmalou's laptop), run one Cognee server and point everyone at it:
+
+```bash
+# on the VPS, next to OpenBot (no public port; reachable as http://pattie-cognee:8000)
+docker compose -f infra/pattie-cognee/compose.yaml up -d --build
+# rebuild tools + watcher so they install cognee and use the shared memory
+docker compose -f infra/pattie-tools/compose.yaml up -d --build
+docker compose -f infra/pattie-watcher/compose.yaml up -d --build
+# load the demo persona once
+docker exec pattie-tools python -m pattie.memory seed demo/anna_susan_profile.md
+```
+
+Any other machine uses it by setting `COGNEE_SERVICE_URL` (over Tailscale, e.g.
+`http://<vps-tailscale-name>:8000` if the port is exposed on the tailnet). Cognee Cloud works the
+same way: `COGNEE_SERVICE_URL=https://<tenant>.cognee.ai` plus `COGNEE_API_KEY`.
+`python -m pattie.memory where` shows which memory a machine uses.

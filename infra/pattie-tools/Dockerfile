@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY pattie/ /app/pattie/
 COPY config/ /app/config/
 COPY demo/anna_susan_prefs.json /app/demo/anna_susan_prefs.json
+COPY demo/anna_susan_profile.md /app/demo/anna_susan_profile.md
 COPY amazon_search.py tilion.py shopping_hours.py /app/
 COPY infra/pattie-tools/secrets.env /app/secrets.env
 

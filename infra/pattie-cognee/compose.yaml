@@ -1,0 +1,29 @@
+# Shared Cognee memory for Pattie. No published ports: only containers on OpenBot's network
+# (pattie-tools, and pattie-watcher through OpenBot's network namespace) reach it, at
+# http://pattie-cognee:8000. Access control is off inside, so keep it private.
+#   cd /opt/pattie && docker compose -f infra/pattie-cognee/compose.yaml up -d --build
+# Then load the demo persona once:
+#   docker exec pattie-tools python -m pattie.memory seed demo/anna_susan_profile.md
+services:
+  pattie-cognee:
+    build:
+      context: ../..
+      dockerfile: infra/pattie-cognee/Dockerfile
+    container_name: pattie-cognee
+    restart: unless-stopped
+    env_file:
+      - /etc/pattie/op-token.env      # OP_SERVICE_ACCOUNT_TOKEN (root-only)
+    volumes:
+      - cognee-data:/data
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - openbot
+
+volumes:
+  cognee-data:
+
+networks:
+  openbot:
+    name: openbot_default
+    external: true

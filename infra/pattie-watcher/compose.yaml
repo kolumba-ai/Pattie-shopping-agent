@@ -20,6 +20,9 @@ services:
     environment:
       PATTIE_TZ: America/Los_Angeles
       PATTIE_USER: anna_susan
+      # Shared memory (infra/pattie-cognee). Remove this line to run without memory.
+      COGNEE_SERVICE_URL: http://pattie-cognee:8000
+      PATTIE_COGNEE_DIR: /tmp/cognee
     volumes:
       - watcher-data:/data
       - type: volume

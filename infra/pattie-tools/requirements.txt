@@ -1,2 +1,3 @@
-# Tools server only. Memory (Cognee) is added later: remember/recall return an error until then.
+# Tools server only. remember/recall use the shared Cognee server (infra/pattie-cognee).
+cognee[anthropic,turso]==1.6.10
 mcp>=1.12,<2
