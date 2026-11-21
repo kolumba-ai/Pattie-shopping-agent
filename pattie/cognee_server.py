@@ -12,6 +12,7 @@ expose it on a private network (the `pattie` Docker network, Tailscale), never p
 
 import argparse
 import os
+from pathlib import Path
 
 
 def main(argv=None) -> None:
@@ -20,9 +21,12 @@ def main(argv=None) -> None:
     p.add_argument("--port", type=int, default=8000)
     args = p.parse_args(argv)
 
-    from .tools import load_env_file  # no Amplitude dependency (the watcher's needs amplitude)
-
-    load_env_file()
+    env = Path(__file__).resolve().parent.parent / ".env"   # read .env without importing other modules
+    if env.exists():
+        for line in env.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
     os.environ.pop("COGNEE_SERVICE_URL", None)  # this process IS the server
     os.environ.setdefault("ENABLE_BACKEND_ACCESS_CONTROL", "false")
     from . import memory
