@@ -115,6 +115,18 @@ def test_bridge_works_from_another_thread():
     assert errors == [] and len(delivery.runs) == 1
 
 
+def test_repeated_failures_are_logged_quietly():
+    bridge, _, logs, _ = setup(fail="the owner hasn't paired with the bot yet")
+    bridge.handle(line({"needs_products": True, "items": [], "food_nudges": []}))
+    for _ in range(25):                       # 25 more retries with the same reason
+        bridge.send_due()
+    failures = [m for m in logs if "could not start" in m]
+    assert len(failures) == 2                 # the first failure, then the 20th retry
+    bridge.api = FakeDelivery(fail="Telegram: timed out")
+    bridge.send_due()
+    assert "Telegram: timed out" in [m for m in logs if "could not start" in m][-1]   # new reason: logged
+
+
 def test_nothing_needed():
     bridge, delivery, logs, _ = setup()
     bridge.handle(line({"needs_products": False, "items": [], "food_nudges": []}))

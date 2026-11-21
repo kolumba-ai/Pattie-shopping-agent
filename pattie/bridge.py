@@ -40,6 +40,7 @@ class DeliveryError(Exception):
 OpenBotError = DeliveryError   # old name, kept for anything still importing it
 
 
+LOG_EVERY = 20       # while a delivery keeps failing, log every 20th retry
 MAX_PAYLOAD = 3900  # keeps each event the agent reads short
 
 
@@ -126,8 +127,9 @@ class Bridge:
 
     def send_due(self) -> int:
         now, sent = self.clock(), 0
-        for eid, routine, due_at, payload in self.db.execute(
-                "SELECT id, routine, due_at, payload FROM outbox WHERE sent_at IS NULL ORDER BY due_at").fetchall():
+        for eid, routine, due_at, payload, tries, last_error in self.db.execute(
+                "SELECT id, routine, due_at, payload, tries, last_error FROM outbox "
+                "WHERE sent_at IS NULL ORDER BY due_at").fetchall():
             if datetime.fromisoformat(due_at) > now:
                 continue
             error = self._run(routine, json.loads(payload), eid)
@@ -135,6 +137,9 @@ class Bridge:
                 self.db.execute("UPDATE outbox SET sent_at = ? WHERE id = ?", (now.isoformat(), eid))
                 sent += 1
             else:
+                # Log the first failure, a changed reason, and then every LOG_EVERY retries
+                if tries == 0 or error != last_error or (tries + 1) % LOG_EVERY == 0:
+                    self.log(f"could not start {routine!r} ({eid}), will retry (try {tries + 1}): {error}")
                 self.db.execute("UPDATE outbox SET tries = tries + 1, last_error = ? WHERE id = ?", (error, eid))
             self.db.commit()
         return sent
@@ -149,7 +154,6 @@ class Bridge:
             self.log(f"started {routine!r}: {what}")
             return None
         except DeliveryError as e:
-            self.log(f"could not start {routine!r} ({what}), will retry: {e}")
             getattr(self.api, "_ids", {}).clear()
             return str(e)
 
